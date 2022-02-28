@@ -9,6 +9,17 @@ use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentMessage {
+    pub message_chiffre: String,
+    pub attachments: Option<Vec<String>>,
+    pub fingerprint_certificat: String,
+    pub hachage_bytes: String,
+
+    #[serde(rename = "en-tete", skip_serializing)]
+    pub entete: Option<Entete>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandePostmasterPoster {
     pub message: Map<String, Value>,
     pub destinations: Vec<IdmgMappingDestinataires>,
@@ -44,4 +55,17 @@ pub struct FicheApplication {
     pub application: String,
     pub url: String,
     pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmationTransmission {
+    pub uuid_message: String,
+    pub idmg: String,
+    pub destinataires: Vec<ConfirmationTransmissionDestinataire>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmationTransmissionDestinataire {
+    pub destinataire: String,
+    pub code: u32,
 }

@@ -4,12 +4,13 @@ use log::{debug, error, info, warn};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
+use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::verificateur::VerificateurMessage;
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
-use crate::messages_struct::{CommandePostmasterPoster, IdmgMappingDestinataires};
+use crate::messages_struct::{CommandePostmasterPoster, ConfirmationTransmission, ConfirmationTransmissionDestinataire, DocumentMessage, IdmgMappingDestinataires};
 
 pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -44,7 +45,7 @@ pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gesti
     }
 }
 
-pub async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
@@ -53,5 +54,47 @@ pub async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionn
     let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu(None)?;
     debug!("commande_poster Message mappe : {:?}", message_poster);
 
+    poster_message(middleware, message_poster).await?;
+
     Ok(None)
+}
+
+async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPoster)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    let message_mappe: DocumentMessage = {
+        let value = serde_json::to_value(message_poster.message.clone())?;
+        serde_json::from_value(value)?
+    };
+
+    let uuid_message = match message_mappe.entete {
+        Some(e) => Ok(e.uuid_transaction.clone()),
+        None => Err(format!("commandes.poster_message Entete manquante du message"))
+    }?;
+
+    for destination in message_poster.destinations {
+        let mut confirmations = Vec::new();
+        let idmg = destination.idmg;
+        for destinataire in destination.destinataires {
+            let conf_dest = ConfirmationTransmissionDestinataire {
+                destinataire,
+                code: 500,
+            };
+            confirmations.push(conf_dest);
+        }
+        let confirmation = ConfirmationTransmission {
+            uuid_message: uuid_message.clone(),
+            idmg,
+            destinataires: confirmations,
+        };
+
+        // Transmettre commande confirmation
+        let routage = RoutageMessageAction::builder("Messagerie", "confirmerTransmission")
+            .exchanges(vec![Securite::L1Public])
+            .build();
+        middleware.transmettre_commande(routage, &confirmation, false).await?;
+    }
+
+    Ok(())
 }
