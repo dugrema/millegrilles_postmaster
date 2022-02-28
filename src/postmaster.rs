@@ -11,7 +11,7 @@ use millegrilles_common_rust::middleware::{EmetteurCertificat, MiddlewareMessage
 use millegrilles_common_rust::tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::tokio::time::sleep;
+use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
@@ -26,10 +26,12 @@ pub async fn run() {
     let gestionnaire = charger_gestionnaire();
 
     // Wiring
-    let (futures, _) = build(gestionnaire).await;
+    let (mut futures, _) = build(gestionnaire).await;
 
     // Run
-    //executer(futures).await
+    info!("domaines_messagerie: Demarrage traitement, top level threads {}", futures.len());
+    let arret = futures.next().await;
+    info!("domaines_messagerie: Fermeture du contexte, task daemon terminee : {:?}", arret);
 }
 
 /// Enum pour distinger les types de gestionnaires.
@@ -39,13 +41,8 @@ enum TypeGestionnaire {
     None
 }
 
-/// Fonction qui lit le certificat local et extrait les fingerprints idmg et de partition
 /// Conserve les gestionnaires dans la variable GESTIONNAIRES 'static
 fn charger_gestionnaire() -> &'static TypeGestionnaire {
-    // Charger une version simplifiee de la configuration - on veut le certificat associe a l'enveloppe privee
-    // let config = charger_configuration().expect("config");
-    // let config_noeud = config.get_configuration_noeud();
-
     // Inserer les gestionnaires dans la variable static - permet d'obtenir lifetime 'static
     unsafe {
         POSTMASTER = TypeGestionnaire::PostmasterPublic(Arc::new(GestionnairePostmaster::new() ));
@@ -58,14 +55,16 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
     // Recuperer configuration des Q de tous les domaines
     let queues = {
         let mut queues: Vec<QueueType> = Vec::new();
-        //for g in gestionnaires.clone() {
-            match gestionnaire {
-                TypeGestionnaire::PostmasterPublic(g) => {
-                    queues.extend(g.preparer_queues());
-                },
-                TypeGestionnaire::None => ()
-            }
-        //}
+
+        match gestionnaire {
+            TypeGestionnaire::PostmasterPublic(g) => {
+                queues.extend(g.preparer_queues());
+            },
+            TypeGestionnaire::None => ()
+        }
+
+        debug!("Queues a preparer : {:?}", queues);
+
         queues
     };
 
@@ -86,15 +85,6 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
 
         Some(Mutex::new(callbacks))
     };
-
-    // Preparer middleware avec acces direct aux tables Pki (le domaine est local)
-    // let (
-    //     middleware,
-    //     rx_messages_verifies,
-    //     rx_messages_verif_reply,
-    //     rx_triggers,
-    //     future_recevoir_messages
-    // ) = preparer_middleware_db(queues, listeners);
 
     let middleware_hooks = preparer_middleware_message(queues, listeners);
     let middleware = middleware_hooks.middleware;
@@ -140,6 +130,8 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
             futures.push(f);
         }
     }
+
+    debug!("Futures a demarrer : {:?}", futures);
 
     (futures, middleware)
 }
@@ -206,15 +198,22 @@ async fn consommer<M>(
 async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>, gestionnaires: Vec<&'static TypeGestionnaire>)
     where M: ValidateurX509 + GenerateurMessages + EmetteurCertificat
 {
+    info!("Debut thread entretien");
     let mut certificat_emis = false;
-    if certificat_emis == false {
-        debug!("entretien Emettre certificat");
-        match middleware.emettre_certificat(middleware.as_ref()).await {
-            Ok(()) => certificat_emis = true,
-            Err(e) => error!("entretien Erreur emission certificat local : {:?}", e),
+
+    loop {
+        sleep(Duration::new(30, 0)).await;
+        if certificat_emis == false {
+            debug!("entretien Emettre certificat");
+            match middleware.emettre_certificat(middleware.as_ref()).await {
+                Ok(()) => certificat_emis = true,
+                Err(e) => error!("entretien Erreur emission certificat local : {:?}", e),
+            }
+            debug!("entretien Fin emission traitement certificat local, resultat : {}", certificat_emis);
         }
-        debug!("entretien Fin emission traitement certificat local, resultat : {}", certificat_emis);
+
+        middleware.entretien_validateur().await;
     }
 
-    middleware.entretien_validateur().await;
+    info!("Fin thread entretien");
 }

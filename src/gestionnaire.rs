@@ -1,14 +1,17 @@
 use std::error::Error;
 use std::sync::Arc;
 
-use millegrilles_common_rust::constantes::Securite;
+use log::{debug, error, info, warn};
+
+use millegrilles_common_rust::constantes::{DEFAULT_Q_TTL, Securite};
 use millegrilles_common_rust::domaines::GestionnaireMessages;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::MiddlewareMessages;
-use millegrilles_common_rust::rabbitmq_dao::{ConfigRoutingExchange, QueueType};
+use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::tokio::time::{Duration, sleep};
 
 use crate::constantes::*;
 
@@ -48,7 +51,11 @@ impl GestionnaireMessages for GestionnairePostmaster {
     }
 
     async fn entretien<M>(&self, middleware: Arc<M>) where M: MiddlewareMessages + 'static {
-        todo!()
+        info!("gestionnaire Debut thread entretien");
+        loop {
+            sleep(Duration::new(30, 0)).await;
+        }
+        info!("gestionnaire Fin thread entretien");
     }
 
     async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: MiddlewareMessages + 'static {
@@ -70,13 +77,6 @@ impl GestionnairePostmaster {
             // tx_pompe_messages: Mutex::new(None)
         }
     }
-    // pub fn get_tx_pompe(&self) -> Sender<MessagePompe> {
-    //     let guard = self.tx_pompe_messages.lock().expect("lock tx pompe");
-    //     match guard.as_ref() {
-    //         Some(p) => p.clone(),
-    //         None => panic!("TX pompe message n'est pas configuree")
-    //     }
-    // }
 
     pub fn preparer_queues(&self) -> Vec<QueueType> {
         preparer_queues()
@@ -107,67 +107,18 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     let mut queues = Vec::new();
 
-    // // Queue de messages volatils (requete, commande, evenements)
-    // queues.push(QueueType::ExchangeQueue (
-    //     ConfigQueue {
-    //         nom_queue: NOM_Q_VOLATILS.into(),
-    //         routing_keys: rk_volatils,
-    //         ttl: DEFAULT_Q_TTL.into(),
-    //         durable: true,
-    //     }
-    // ));
-
-    // let mut rk_transactions = Vec::new();
-    // let transactions_secures: Vec<&str> = vec![
-    //     TRANSACTION_POSTER,
-    //     TRANSACTION_RECEVOIR,
-    //     TRANSACTION_INITIALISER_PROFIL,
-    //     TRANSACTION_MAJ_CONTACT,
-    //     TRANSACTION_LU,
-    // ];
-    // for ts in transactions_secures {
-    //     rk_transactions.push(ConfigRoutingExchange {
-    //         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, ts).into(),
-    //         exchange: Securite::L4Secure
-    //     });
-    // }
-
-    // RK protege
-    // let transactions_protegees: Vec<&str> = vec![
-    //     // TRANSACTION_ASSOCIER_CONVERSIONS,
-    //     // TRANSACTION_ASSOCIER_VIDEO,
-    // ];
-    // for t in transactions_protegees {
-    //     rk_transactions.push(ConfigRoutingExchange {
-    //         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, t).into(),
-    //         exchange: Securite::L3Protege
-    //     });
-    // }
-
-    // Queue de transactions
-    // queues.push(QueueType::ExchangeQueue (
-    //     ConfigQueue {
-    //         nom_queue: NOM_Q_TRANSACTIONS.into(),
-    //         routing_keys: rk_transactions,
-    //         ttl: None,
-    //         durable: true,
-    //     }
-    // ));
+    // Queue de messages volatils (requete, commande, evenements)
+    queues.push(QueueType::ExchangeQueue (
+        ConfigQueue {
+            nom_queue: NOM_Q_VOLATILS.into(),
+            routing_keys: rk_volatils,
+            ttl: DEFAULT_Q_TTL.into(),
+            durable: true,
+        }
+    ));
 
     // Queue de triggers pour Pki
-    // queues.push(QueueType::Triggers (DOMAINE_NOM.into()));
-
-    // Queue de pompe de messages
-    // let mut rk_pompe = Vec::new();
-    // rk_pompe.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_NOM, EVENEMENT_POMPE_POSTE), exchange: Securite::L4Secure});
-    // queues.push(QueueType::ExchangeQueue (
-    //     ConfigQueue {
-    //         nom_queue: NOM_Q_MESSAGE_POMPE.into(),
-    //         routing_keys: rk_pompe,
-    //         ttl: DEFAULT_Q_TTL.into(),
-    //         durable: true,
-    //     }
-    // ));
+    queues.push(QueueType::Triggers (DOMAINE_NOM.into()));
 
     queues
 }
