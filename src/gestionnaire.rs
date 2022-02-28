@@ -59,7 +59,11 @@ impl GestionnaireMessages for GestionnairePostmaster {
     }
 
     async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: MiddlewareMessages + 'static {
-        todo!()
+        if let Err(e) = traiter_cedule(self, middleware, trigger).await {
+            error!("traiter_cedule Erreur traitement cedule : {:?}", e);
+        };
+
+        Ok(())
     }
 }
 
@@ -121,4 +125,23 @@ pub fn preparer_queues() -> Vec<QueueType> {
     queues.push(QueueType::Triggers (DOMAINE_NOM.into()));
 
     queues
+}
+
+pub async fn traiter_cedule<M>(gestionnaire: &GestionnairePostmaster, middleware: &M, trigger: &MessageCedule)
+                               -> Result<(), Box<dyn Error>>
+    where M: MiddlewareMessages + 'static
+{
+    debug!("Traiter cedule {}", DOMAINE_NOM);
+
+    // let mut prochain_entretien_index_media = chrono::Utc::now();
+    // let intervalle_entretien_index_media = chrono::Duration::minutes(5);
+
+    // let date_epoch = trigger.get_date();
+    // let minutes = date_epoch.get_datetime().minute();
+
+    // Executer a toutes les 5 minutes
+    // if minutes % 5 == 0 {
+    // }
+
+    Ok(())
 }
