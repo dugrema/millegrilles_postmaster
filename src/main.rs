@@ -4,6 +4,7 @@ mod constantes;
 mod requetes;
 mod commandes;
 mod evenements;
+mod messages_struct;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

@@ -7,8 +7,9 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::verificateur::VerificateurMessage;
-use crate::constantes::DOMAINE_NOM;
+use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
+use crate::messages_struct::{CommandePostmasterPoster, IdmgMappingDestinataires};
 
 pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -36,11 +37,21 @@ pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gesti
 
     match m.action.as_str() {
         // Commandes standard
-        // TRANSACTION_POSTER => commande_poster(middleware, m, gestionnaire).await,
-
-        // COMMANDE_INDEXER => commande_reindexer(middleware, m, gestionnaire).await,
+        COMMANDE_POSTER => commande_poster(middleware, m, gestionnaire).await,
 
         // Commandes inconnues
         _ => Err(format!("consommer_commande: Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
     }
+}
+
+pub async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
+    debug!("commande_poster Traiter message poster recu : {:?}", uuid_transaction);
+    let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu(None)?;
+    debug!("commande_poster Message mappe : {:?}", message_poster);
+
+    Ok(None)
 }
