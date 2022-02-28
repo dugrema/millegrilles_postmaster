@@ -12,8 +12,11 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
+use crate::commandes::consommer_commande;
 
 use crate::constantes::*;
+use crate::evenements::consommer_evenement;
+use crate::requetes::consommer_requete;
 
 #[derive(Debug)]
 pub struct GestionnairePostmaster {
@@ -38,16 +41,25 @@ impl GestionnaireMessages for GestionnairePostmaster {
         preparer_queues()
     }
 
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> where M: MiddlewareMessages + 'static {
-        todo!()
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: MiddlewareMessages + 'static
+    {
+        consommer_requete(middleware, message, &self).await
     }
 
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> where M: MiddlewareMessages + 'static {
-        todo!()
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: MiddlewareMessages + 'static
+    {
+        consommer_commande(middleware, message, &self).await
     }
 
-    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> where M: MiddlewareMessages + 'static {
-        todo!()
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: MiddlewareMessages + 'static
+    {
+        consommer_evenement(self, middleware, message).await
     }
 
     async fn entretien<M>(&self, middleware: Arc<M>) where M: MiddlewareMessages + 'static {
@@ -92,16 +104,6 @@ pub fn preparer_queues() -> Vec<QueueType> {
     //let mut rk_sauvegarder_cle = Vec::new();
 
     // RK 1.public
-    // let requetes_privees: Vec<&str> = vec![
-    //     REQUETE_GET_MESSAGES,
-    //     REQUETE_GET_PERMISSION_MESSAGES,
-    //     REQUETE_GET_PROFIL,
-    //     REQUETE_GET_CONTACTS,
-    // ];
-    // for req in requetes_privees {
-    //     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
-    // }
-
     let commandes_publiques: Vec<&str> = vec![
         COMMANDE_POSTER,
     ];
