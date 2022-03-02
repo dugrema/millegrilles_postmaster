@@ -1,6 +1,7 @@
 use std::error::Error;
 use log::{debug, error, info, warn};
 use core::time::Duration;
+use deflate::deflate_bytes_gzip;
 
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
@@ -87,7 +88,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
-    // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+    headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
     let client = reqwest::Client::builder()
         .default_headers(headers)
         .connect_timeout(Duration::from_secs(10))
@@ -120,7 +121,9 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
                 &message_http, None::<&str>, None::<&str>, None::<&str>, None, true)?;
             let message_str = serde_json::to_string(&message_signe)?;
 
-            message_str
+            let message_bytes = deflate_bytes_gzip(message_str.as_bytes());
+
+            message_bytes
         };
 
         // Emettre message via HTTP POST
