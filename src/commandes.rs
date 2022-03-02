@@ -1,5 +1,6 @@
 use std::error::Error;
 use log::{debug, error, info, warn};
+use core::time::Duration;
 
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
@@ -7,7 +8,10 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::serde_json;
+use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::verificateur::VerificateurMessage;
+use millegrilles_common_rust::reqwest;
+
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
 use crate::messages_struct::{CommandePostmasterPoster, ConfirmationTransmission, ConfirmationTransmissionDestinataire, DocumentMessage, IdmgMappingDestinataires};
@@ -68,12 +72,74 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         serde_json::from_value(value)?
     };
 
+    // Ajouter _certificat et _millegrille au message
+    let message_map = {
+        let mut message_map = message_poster.message;
+        message_map.insert("_certificat".into(), Value::from(message_poster.certificat_message.clone()));
+        message_map.insert("_millegrille".into(), Value::from(message_poster.certificat_millegrille.clone()));
+        message_map
+    };
+
     let uuid_message = match message_mappe.entete {
         Some(e) => Ok(e.uuid_transaction.clone()),
         None => Err(format!("commandes.poster_message Entete manquante du message"))
     }?;
 
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+    // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .connect_timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
+        .build()?;
+
     for destination in message_poster.destinations {
+
+        let cle_info = &message_poster.cle_info;
+        let message_bytes = {
+            let message_http = json!({
+                "message": &message_map,
+                "chiffrage": {
+                    "cles": &destination.cles,
+                    "domaine": "Messagerie",
+                    "format": &cle_info.format,
+                    "hachage_bytes": &cle_info.hachage_bytes,
+                    "identificateurs_document": {
+                        "message": "true"
+                    },
+                    "iv": &cle_info.iv,
+                    "tag": &cle_info.tag,
+                },
+                "destinataires": &destination.destinataires,
+            });
+            debug!("poster_message POST message {:?}", message_http);
+
+            // Signer le message, compresser en gzip et pousser via https
+            let message_signe = middleware.formatter_message(
+                &message_http, None::<&str>, None::<&str>, None::<&str>, None, true)?;
+            let message_str = serde_json::to_string(&message_signe)?;
+
+            message_str
+        };
+
+        // Emettre message via HTTP POST
+        // Boucler dans la liste des destinations pour la millegrille tierce
+        for app_config in &destination.fiche.application {
+            let url_app = app_config.url.as_str();
+            let url_poster = format!("{}/poster", url_app);
+            debug!("Poster message vers {}", url_poster);
+            let res = client.post(url_poster)
+                .body(message_bytes.clone())
+                .send()
+                .await?;
+            debug!("Reponse post HTTP : {:?}", res);
+            let status_reponse = res.status();
+            if status_reponse.is_success() {
+                break;  // On a reussi le transfert, pas besoin de poursuivre
+            }
+        }
+
         let mut confirmations = Vec::new();
         let idmg = destination.idmg;
         for destinataire in destination.destinataires {
