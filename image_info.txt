@@ -1,0 +1,9 @@
+REPO=docker.maceroc.com
+# DOCKERHUB_REPO=dugremat
+URL_SERVEUR_DEV=mathieu@mg-dev5.maple.maceroc.com
+NAME=millegrilles_postmaster
+ARCH_SUPPORTEES=( x86_64 aarch64 )
+BRANCH=`git rev-parse --abbrev-ref HEAD`
+BUILD=0
+
+VERSION=$BRANCH.$BUILD
