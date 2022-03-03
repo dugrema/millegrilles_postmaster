@@ -4,6 +4,7 @@ use log::{debug, error, info, warn};
 
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::{charger_configuration, ConfigMessages, IsConfigNoeud};
+use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::domaines::GestionnaireMessages;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
@@ -86,7 +87,7 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
         Some(Mutex::new(callbacks))
     };
 
-    let middleware_hooks = preparer_middleware_message(queues, listeners);
+    let middleware_hooks = preparer_middleware_message(queues, listeners, Securite::L1Public);
     let middleware = middleware_hooks.middleware;
 
     // Preparer les green threads de tous les domaines/processus
