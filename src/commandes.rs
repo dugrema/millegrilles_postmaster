@@ -128,6 +128,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
 
         // Emettre message via HTTP POST
         // Boucler dans la liste des destinations pour la millegrille tierce
+        let mut status_reponse = None;
         for app_config in &destination.fiche.application {
             let url_app = app_config.url.as_str();
             let url_poster = format!("{}/poster", url_app);
@@ -137,18 +138,23 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
                 .send()
                 .await?;
             debug!("Reponse post HTTP : {:?}", res);
-            let status_reponse = res.status();
-            if status_reponse.is_success() {
+            if res.status().is_success() {
+                status_reponse = Some(res.status());
                 break;  // On a reussi le transfert, pas besoin de poursuivre
             }
         }
+
+        let code_reponse = match status_reponse {
+            Some(r) => r.as_u16(),
+            None => 503
+        };
 
         let mut confirmations = Vec::new();
         let idmg = destination.idmg;
         for destinataire in destination.destinataires {
             let conf_dest = ConfirmationTransmissionDestinataire {
                 destinataire,
-                code: 500,
+                code: code_reponse as u32,  // TODO code par usager (e.g. 404, usager non trouve)
             };
             confirmations.push(conf_dest);
         }
@@ -156,6 +162,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
             uuid_message: uuid_message.clone(),
             idmg,
             destinataires: confirmations,
+            code: code_reponse,
         };
 
         // Transmettre commande confirmation

@@ -64,6 +64,7 @@ pub struct ConfirmationTransmission {
     pub uuid_message: String,
     pub idmg: String,
     pub destinataires: Vec<ConfirmationTransmissionDestinataire>,
+    pub code: u16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
