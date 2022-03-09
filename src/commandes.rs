@@ -4,6 +4,7 @@ use core::time::Duration;
 use deflate::deflate_bytes_gzip;
 
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
@@ -16,10 +17,11 @@ use millegrilles_common_rust::reqwest;
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
 use crate::messages_struct::*;
+use crate::transfert_fichier::*;
 
 pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
     debug!("consommer_commande : {:?}", &m.message);
 
@@ -178,7 +180,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
 
 async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
     let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
     debug!("commande_pousser_attachment Traiter message recu : {:?}", uuid_transaction);
@@ -256,30 +258,4 @@ async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePou
     debug!("get_prochain_attachment Reponse prochain attachment : {:?}", reponse);
 
     Ok(reponse)
-}
-
-async fn uploader_attachment<M>(middleware: &M, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
-    -> Result<(), Box<dyn Error>>
-    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
-{
-    debug!("uploader_attachment Attachment fuuid {}", fuuid);
-    let idmg = fiche.idmg.as_str();
-
-    { // Emettre evenement de debut - s'assure de confirmer que le fichier est en cours de traitement
-        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT).build();
-        let evenement_debut = EvenementUploadAttachment::nouveau(
-            uuid_message.into(), idmg.into(), fuuid.into());
-        middleware.emettre_evenement(routage, &evenement_debut).await?;
-    }
-
-    // Creer pipeline d'upload vers le serveur distant.
-
-    { // Emettre evenement de confirmation d'upload complete
-        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT).build();
-        let evenement_debut = EvenementUploadAttachment::complete(
-            uuid_message.into(), idmg.into(), fuuid.into(), 201);
-        middleware.emettre_evenement(routage, &evenement_debut).await?;
-    }
-
-    Ok(())
 }
