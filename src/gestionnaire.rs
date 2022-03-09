@@ -106,6 +106,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // RK 1.public
     let commandes_publiques: Vec<&str> = vec![
         COMMANDE_POSTER,
+        COMMANDE_POUSSER_ATTACHMENT,
     ];
     for cmd in commandes_publiques {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, cmd), exchange: Securite::L1Public});

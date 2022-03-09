@@ -7,7 +7,7 @@ use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissi
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::recepteur_messages::MessageValideAction;
+use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::verificateur::VerificateurMessage;
@@ -15,7 +15,7 @@ use millegrilles_common_rust::reqwest;
 
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
-use crate::messages_struct::{CommandePostmasterPoster, ConfirmationTransmission, ConfirmationTransmissionDestinataire, DocumentMessage, IdmgMappingDestinataires};
+use crate::messages_struct::*;
 
 pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -44,6 +44,7 @@ pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gesti
     match m.action.as_str() {
         // Commandes standard
         COMMANDE_POSTER => commande_poster(middleware, m, gestionnaire).await,
+        COMMANDE_POUSSER_ATTACHMENT => commande_pousser_attachment(middleware, m, gestionnaire).await,
 
         // Commandes inconnues
         _ => Err(format!("consommer_commande: Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -173,4 +174,71 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
     }
 
     Ok(())
+}
+
+async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
+    debug!("commande_pousser_attachment Traiter message recu : {:?}", uuid_transaction);
+    let message_poster: CommandePousserAttachments = m.message.parsed.map_contenu(None)?;
+    debug!("commande_pousser_attachment Message mappe : {:?}", message_poster);
+
+    // TODO Requete vers topologie pour idmg
+    let fiche = get_fiche(middleware, &message_poster).await?;
+
+    // TODO Requete vers messagerie pour recuperer les fuuids a uploader
+    let prochain_attachment = get_prochain_attachment(middleware, &message_poster).await?;
+
+    Ok(None)
+}
+
+async fn get_fiche<M>(middleware: &M, message_poster: &CommandePousserAttachments)
+    -> Result<FicheMillegrilleApplication, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    let idmg = message_poster.idmg_destination.as_str();
+
+    let routage_topologie = RoutageMessageAction::builder(
+        DOMAINE_TOPOLOGIE, ACTION_APPLICATIONS_TIERS)
+        .build();
+    let requete_topologie = RequeteTopologieFicheApplication { idmgs: vec![idmg.into()], application: "messagerie".into() };
+    let reponse_topologie = middleware.transmettre_requete(routage_topologie, &requete_topologie).await?;
+
+    debug!("get_fiche Reponse fiche topologie : {:?}", reponse_topologie);
+    let reponse_topologie = match reponse_topologie {
+        TypeMessage::Valide(r) => Ok(r),
+        _ => Err(format!("commandes.get_fiche Reponse fiche topologie mauvais format"))
+    }?;
+
+    let reponse_mappee: ReponseFichesApplication = reponse_topologie.message.parsed.map_contenu(None)?;
+
+    if reponse_mappee.fiches.len() == 1 {
+        // Retourner la fiche
+        if let Some(r) = reponse_mappee.fiches.into_iter().next() {
+            return Ok(r)
+        }
+    }
+    Err(format!("commandes.get_fiche Aucune fiche trouve pour l'application messagerie sur {}", idmg))?
+}
+
+async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePousserAttachments)
+    -> Result<ReponseProchainAttachment, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, ACTION_PROCHAIN_ATTACHMENT)
+        .build();
+
+    let reponse: ReponseProchainAttachment = match middleware.transmettre_commande(routage, message_poster, true).await? {
+        Some(t) => match t {
+            TypeMessage::Valide(m) => Ok(m.message.parsed.map_contenu(None)?),
+            _ => Err(format!("commandes.get_prochain_attachment Mauvais type message en reponse"))
+        },
+        None => Err(format!("commandes.get_prochain_attachment Aucune reponse pour le prochain attachment"))
+    }?;
+
+    debug!("get_prochain_attachment Reponse prochain attachment : {:?}", reponse);
+
+    Ok(reponse)
 }

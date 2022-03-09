@@ -44,6 +44,11 @@ pub struct DocMappingIdmg {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReponseFichesApplication {
+    pub fiches: Vec<FicheMillegrilleApplication>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FicheMillegrilleApplication {
     pub idmg: String,
     pub adresses: Vec<String>,
@@ -71,4 +76,21 @@ pub struct ConfirmationTransmission {
 pub struct ConfirmationTransmissionDestinataire {
     pub destinataire: String,
     pub code: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandePousserAttachments {
+    pub uuid_message: String,
+    pub idmg_destination: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequeteTopologieFicheApplication {
+    pub idmgs: Vec<String>,
+    pub application: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReponseProchainAttachment {
+    pub fuuid: String,
 }
