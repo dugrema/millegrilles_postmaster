@@ -185,11 +185,26 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
     let message_poster: CommandePousserAttachments = m.message.parsed.map_contenu(None)?;
     debug!("commande_pousser_attachment Message mappe : {:?}", message_poster);
 
-    // TODO Requete vers topologie pour idmg
     let fiche = get_fiche(middleware, &message_poster).await?;
+    let uuid_message = message_poster.uuid_message.as_str();
 
     // TODO Requete vers messagerie pour recuperer les fuuids a uploader
-    let prochain_attachment = get_prochain_attachment(middleware, &message_poster).await?;
+    loop {
+        let prochain_attachment = get_prochain_attachment(middleware, &message_poster).await?;
+
+        if ! prochain_attachment.ok {
+            debug!("commande_pousser_attachment Reponse prochain attachement ok=false, on termine");
+        }
+
+        // Uploader l'attachment
+        match prochain_attachment.fuuid.as_ref() {
+            Some(f) => uploader_attachment(middleware, &fiche, f.as_str(), uuid_message).await?,
+            None => {
+                debug!("commande_pousser_attachment Aucun fuuid recu, on termine");
+                break
+            }
+        }
+    }
 
     Ok(None)
 }
@@ -201,7 +216,7 @@ async fn get_fiche<M>(middleware: &M, message_poster: &CommandePousserAttachment
     let idmg = message_poster.idmg_destination.as_str();
 
     let routage_topologie = RoutageMessageAction::builder(
-        DOMAINE_TOPOLOGIE, ACTION_APPLICATIONS_TIERS)
+        DOMAINE_TOPOLOGIE, REQUETE_APPLICATIONS_TIERS)
         .build();
     let requete_topologie = RequeteTopologieFicheApplication { idmgs: vec![idmg.into()], application: "messagerie".into() };
     let reponse_topologie = middleware.transmettre_requete(routage_topologie, &requete_topologie).await?;
@@ -227,7 +242,7 @@ async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePou
     -> Result<ReponseProchainAttachment, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
-    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, ACTION_PROCHAIN_ATTACHMENT)
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, COMMANDE_PROCHAIN_ATTACHMENT)
         .build();
 
     let reponse: ReponseProchainAttachment = match middleware.transmettre_commande(routage, message_poster, true).await? {
@@ -241,4 +256,30 @@ async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePou
     debug!("get_prochain_attachment Reponse prochain attachment : {:?}", reponse);
 
     Ok(reponse)
+}
+
+async fn uploader_attachment<M>(middleware: &M, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509
+{
+    debug!("uploader_attachment Attachment fuuid {}", fuuid);
+    let idmg = fiche.idmg.as_str();
+
+    { // Emettre evenement de debut - s'assure de confirmer que le fichier est en cours de traitement
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT).build();
+        let evenement_debut = EvenementUploadAttachment::nouveau(
+            uuid_message.into(), idmg.into(), fuuid.into());
+        middleware.emettre_evenement(routage, &evenement_debut).await?;
+    }
+
+    // Creer pipeline d'upload vers le serveur distant.
+
+    { // Emettre evenement de confirmation d'upload complete
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT).build();
+        let evenement_debut = EvenementUploadAttachment::complete(
+            uuid_message.into(), idmg.into(), fuuid.into(), 201);
+        middleware.emettre_evenement(routage, &evenement_debut).await?;
+    }
+
+    Ok(())
 }

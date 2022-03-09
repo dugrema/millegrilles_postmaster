@@ -7,6 +7,7 @@ use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, Entete};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
+use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_TERMINE};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentMessage {
@@ -92,5 +93,43 @@ pub struct RequeteTopologieFicheApplication {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReponseProchainAttachment {
+    pub fuuid: Option<String>,
+    pub ok: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvenementUploadAttachment {
+    pub uuid_message: String,
+    pub idmg: String,
     pub fuuid: String,
+    pub code: u32,
+    pub http_status: Option<u16>,
+    pub retry_after: Option<u32>,
+    pub complete: bool,
+}
+
+impl EvenementUploadAttachment {
+    pub fn nouveau(uuid_message: String, idmg: String, fuuid: String) -> Self {
+        EvenementUploadAttachment {
+            uuid_message,
+            idmg,
+            fuuid,
+            code: CODE_UPLOAD_DEBUT,
+            http_status: None,
+            retry_after: None,
+            complete: false,
+        }
+    }
+
+    pub fn complete(uuid_message: String, idmg: String, fuuid: String, http_status: u16) -> Self {
+        EvenementUploadAttachment {
+            uuid_message,
+            idmg,
+            fuuid,
+            code: CODE_UPLOAD_TERMINE,
+            http_status: Some(http_status),
+            retry_after: None,
+            complete: true,
+        }
+    }
 }
