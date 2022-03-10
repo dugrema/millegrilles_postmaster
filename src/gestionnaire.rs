@@ -11,6 +11,9 @@ use millegrilles_common_rust::middleware::MiddlewareMessages;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::certificats::EnveloppePrivee;
+use millegrilles_common_rust::reqwest;
+use millegrilles_common_rust::reqwest::Client;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use crate::commandes::consommer_commande;
 
@@ -21,6 +24,7 @@ use crate::requetes::consommer_requete;
 #[derive(Debug)]
 pub struct GestionnairePostmaster {
     // tx_pompe_messages: Mutex<Option<Sender<MessagePompe>>>,
+    pub client_fichiers: Option<Client>
 }
 
 #[async_trait]
@@ -82,7 +86,7 @@ impl GestionnaireMessages for GestionnairePostmaster {
 impl Clone for GestionnairePostmaster {
     fn clone(&self) -> Self {
         GestionnairePostmaster {
-            // tx_pompe_messages: Mutex::new(Some(self.get_tx_pompe()))
+            client_fichiers: self.client_fichiers.clone()
         }
     }
 }
@@ -90,7 +94,7 @@ impl Clone for GestionnairePostmaster {
 impl GestionnairePostmaster {
     pub fn new() -> GestionnairePostmaster {
         return GestionnairePostmaster {
-            // tx_pompe_messages: Mutex::new(None)
+            client_fichiers: None,
         }
     }
 
@@ -147,4 +151,24 @@ pub async fn traiter_cedule<M>(gestionnaire: &GestionnairePostmaster, middleware
     // }
 
     Ok(())
+}
+
+pub fn new_client_fichiers(enveloppe_privee: &EnveloppePrivee) -> Result<Client, Box<dyn Error>> {
+    let ca_cert_pem = match enveloppe_privee.chaine_pem().last() {
+        Some(cert) => cert.as_str(),
+        None => Err(format!("transfert_fichier.transferer_fichier Certificat CA manquant"))?,
+    };
+    let root_ca = reqwest::Certificate::from_pem(ca_cert_pem.as_bytes())?;
+    let identity = reqwest::Identity::from_pem(enveloppe_privee.clecert_pem.as_bytes())?;
+
+    let client_interne = reqwest::Client::builder()
+        .add_root_certificate(root_ca)
+        .identity(identity)
+        .https_only(true)
+        .use_rustls_tls()
+        // .http1_only()
+        .http2_adaptive_window(true)
+        .build()?;
+
+    Ok(client_interne)
 }

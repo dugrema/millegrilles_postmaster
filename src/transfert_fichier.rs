@@ -1,5 +1,6 @@
 use log::{debug, error, info, warn};
 use std::error::Error;
+use std::io::ErrorKind;
 use tokio_util::io::StreamReader;
 
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -15,9 +16,10 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 
 use crate::constantes::*;
+use crate::gestionnaire::{GestionnairePostmaster, new_client_fichiers};
 use crate::messages_struct::*;
 
-pub async fn uploader_attachment<M>(middleware: &M, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
+pub async fn uploader_attachment<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
                                     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
@@ -31,7 +33,7 @@ pub async fn uploader_attachment<M>(middleware: &M, fiche: &FicheMillegrilleAppl
     }
 
     // Creer pipeline d'upload vers le serveur distant.
-    transferer_fichier(middleware, fiche, fuuid, uuid_message).await?;
+    transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await?;
 
     { // Emettre evenement de confirmation d'upload complete
         let evenement = EvenementUploadAttachment::complete(
@@ -51,26 +53,11 @@ async fn emettre_evenement_upload<M>(middleware: &M, evenement: EvenementUploadA
     Ok(())
 }
 
-async fn transferer_fichier<M>(middleware: &M, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
+async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
     -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
-    let enveloppe_privee = middleware.get_enveloppe_privee();
-    let ca_cert_pem = match enveloppe_privee.chaine_pem().last() {
-        Some(cert) => cert.as_str(),
-        None => Err(format!("Certificat CA manquant"))?,
-    };
-    let root_ca = reqwest::Certificate::from_pem(ca_cert_pem.as_bytes())?;
-    let identity = reqwest::Identity::from_pem(enveloppe_privee.clecert_pem.as_bytes())?;
-
-    let client_interne = reqwest::Client::builder()
-        .add_root_certificate(root_ca)
-        .identity(identity)
-        .https_only(true)
-        .use_rustls_tls()
-        // .http1_only()
-        .http2_adaptive_window(true)
-        .build()?;
+    let client_interne = gestionnaire.client_fichiers.as_ref().expect("client reqwest fichiers locaux");
 
     let url_get_fichier = match &middleware.get_configuration_noeud().fichiers_url {
         Some(u) => {
@@ -79,12 +66,15 @@ async fn transferer_fichier<M>(middleware: &M, fiche: &FicheMillegrilleApplicati
             url_get_fichier.set_path(url_liste_fichiers_str.as_str());
             url_get_fichier
         },
-        None => Err(format!("URL fichiers n'est pas disponible"))?
+        None => Err(format!("transfert_fichier.transferer_fichier URL fichiers n'est pas disponible"))?
     };
 
     let request_get = client_interne.get(url_get_fichier);
     let reponse = request_get.send().await?;
-    debug!("transferer_fichier Reponse : {:?}", reponse);
+    debug!("transferer_fichier transferer_fichier Reponse : {:?}", reponse);
+    if ! reponse.status().is_success() {
+        Err(format!("transfert_fichier.transferer_fichier Erreur ouverture fichier (source), status {}", reponse.status().as_u16()))?
+    }
 
     let byte_stream = reponse.bytes_stream();
     let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
@@ -98,21 +88,21 @@ async fn transferer_fichier<M>(middleware: &M, fiche: &FicheMillegrilleApplicati
     loop {
         let len_read = reader.read(&mut buf).await?;
         taille_fichier += len_read;
-        debug!("Data lu : {:?}", len_read);
-        if len_read == 0 {
-            break;
-        }
+        // debug!("Data lu : {:?}", len_read);
+        if len_read == 0 { break; }
         hacheur.update(&buf[..len_read]);
     }
     let fuuid_calcule = hacheur.finalize();
-    debug!("Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
-    if fuuid_calcule != fuuid {
-        Err(format!("Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
+    if fuuid_calcule == fuuid {
+        debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
+    } else {
+        Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
     }
 
     Ok(())
 }
 
 fn convert_err(err: reqwest::Error) -> std::io::Error {
-    todo!()
+    // std::io::Error::from(Err(format!("convert_err Erreur lecture reqwest : {:?}", err)));
+    std::io::Error::new(ErrorKind::Other, err)
 }

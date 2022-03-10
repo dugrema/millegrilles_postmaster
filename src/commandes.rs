@@ -200,7 +200,7 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
 
         // Uploader l'attachment
         match prochain_attachment.fuuid.as_ref() {
-            Some(f) => uploader_attachment(middleware, &fiche, f.as_str(), uuid_message).await?,
+            Some(f) => uploader_attachment(middleware, gestionnaire, &fiche, f.as_str(), uuid_message).await?,
             None => {
                 debug!("commande_pousser_attachment Aucun fuuid recu, on termine");
                 break

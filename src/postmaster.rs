@@ -8,7 +8,7 @@ use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::domaines::GestionnaireMessages;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{EmetteurCertificat, MiddlewareMessage, preparer_middleware_message};
+use millegrilles_common_rust::middleware::{EmetteurCertificat, IsConfigurationPki, MiddlewareMessage, preparer_middleware_message};
 use millegrilles_common_rust::tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -17,17 +17,13 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 
-use crate::gestionnaire::GestionnairePostmaster;
+use crate::gestionnaire::{GestionnairePostmaster, new_client_fichiers};
 
 static mut POSTMASTER: TypeGestionnaire = TypeGestionnaire::None;
 
 pub async fn run() {
-
-    // Init gestionnaires ('static)
-    let gestionnaire = charger_gestionnaire();
-
     // Wiring
-    let (mut futures, _) = build(gestionnaire).await;
+    let (mut futures, _) = build().await;
 
     // Run
     info!("domaines_messagerie: Demarrage traitement, top level threads {}", futures.len());
@@ -42,30 +38,25 @@ enum TypeGestionnaire {
     None
 }
 
-/// Conserve les gestionnaires dans la variable GESTIONNAIRES 'static
-fn charger_gestionnaire() -> &'static TypeGestionnaire {
+/// Conserve les gestionnaires dans la variable 'static
+fn charger_gestionnaire(gestionnaire: GestionnairePostmaster) -> &'static TypeGestionnaire {
     // Inserer les gestionnaires dans la variable static - permet d'obtenir lifetime 'static
     unsafe {
-        POSTMASTER = TypeGestionnaire::PostmasterPublic(Arc::new(GestionnairePostmaster::new() ));
+        POSTMASTER = TypeGestionnaire::PostmasterPublic(Arc::new(gestionnaire));
         &POSTMASTER
     }
 }
 
-async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
+// async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
+async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
+
+    let mut gestionnaire1 = GestionnairePostmaster::new();
 
     // Recuperer configuration des Q de tous les domaines
     let queues = {
         let mut queues: Vec<QueueType> = Vec::new();
-
-        match gestionnaire {
-            TypeGestionnaire::PostmasterPublic(g) => {
-                queues.extend(g.preparer_queues());
-            },
-            TypeGestionnaire::None => ()
-        }
-
+        queues.extend(gestionnaire1.preparer_queues());
         debug!("Queues a preparer : {:?}", queues);
-
         queues
     };
 
@@ -90,6 +81,14 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
     let middleware_hooks = preparer_middleware_message(queues, listeners, Securite::L1Public);
     let middleware = middleware_hooks.middleware;
 
+    // Wiring final du gestionnaire
+    let g2 = match new_client_fichiers(middleware.get_enveloppe_privee().as_ref()) {
+        Ok(g) => g,
+        Err(e) => panic!("Erreur creation client reqwest pour fichiers locaux")
+    };
+    gestionnaire1.client_fichiers = Some(g2);
+    let gestionnaire_static = charger_gestionnaire(gestionnaire1);
+
     // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
     {
@@ -100,7 +99,7 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
             let (
                 routing_g,
                 futures_g,
-            ) = match gestionnaire {
+            ) = match gestionnaire_static {
                 TypeGestionnaire::PostmasterPublic(g) => {
                     g.preparer_threads(middleware.clone()).await.expect("gestionnaire")
                 },
@@ -124,7 +123,7 @@ async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<Joi
         ));
 
         // ** Thread d'entretien **
-        futures.push(spawn(entretien(middleware.clone(), rx_entretien, vec![gestionnaire])));
+        futures.push(spawn(entretien(middleware.clone(), rx_entretien, vec![gestionnaire_static])));
 
         // Thread ecoute et validation des messages
         for f in middleware_hooks.futures {
