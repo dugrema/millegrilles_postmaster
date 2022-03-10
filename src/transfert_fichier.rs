@@ -7,7 +7,11 @@ use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::reqwest;
 use millegrilles_common_rust::verificateur::VerificateurMessage;
-use millegrilles_common_rust::futures::stream::TryStreamExt; // for map_err
+use millegrilles_common_rust::futures::stream::TryStreamExt;
+use millegrilles_common_rust::hachages::Hacheur;
+use millegrilles_common_rust::multibase::Base;
+use millegrilles_common_rust::multihash::Code;
+// for map_err
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 
 use crate::constantes::*;
@@ -85,6 +89,10 @@ async fn transferer_fichier<M>(middleware: &M, fiche: &FicheMillegrilleApplicati
     let byte_stream = reponse.bytes_stream();
     let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
 
+    let mut hacheur = Hacheur::builder()
+        .digester(Code::Blake2b512)
+        .base(Base::Base58Btc)
+        .build();
     let mut buf = [0; 32768];
     let mut taille_fichier = 0;
     loop {
@@ -94,8 +102,13 @@ async fn transferer_fichier<M>(middleware: &M, fiche: &FicheMillegrilleApplicati
         if len_read == 0 {
             break;
         }
+        hacheur.update(&buf[..len_read]);
     }
-    debug!("Taille totale : {}", taille_fichier);
+    let fuuid_calcule = hacheur.finalize();
+    debug!("Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
+    if fuuid_calcule != fuuid {
+        Err(format!("Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
+    }
 
     Ok(())
 }
