@@ -12,6 +12,7 @@ use millegrilles_common_rust::futures::stream::TryStreamExt;
 use millegrilles_common_rust::hachages::Hacheur;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multihash::Code;
+use millegrilles_common_rust::reqwest::Response;
 // for map_err
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 
@@ -64,6 +65,46 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
+    // Ouvrir reader aupres de la millegrille locale
+    let mut reader = {
+        let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
+        let byte_stream = reponse_local.bytes_stream();
+        StreamReader::new(byte_stream.map_err(convert_err))
+    };
+
+    // Ouvrir writer aupres de la millegrille distante
+
+
+    let mut hacheur = Hacheur::builder()
+        .digester(Code::Blake2b512)
+        .base(Base::Base58Btc)
+        .build();
+    let mut buf = [0; 32768];
+    let mut taille_fichier = 0;
+
+    // Streamer le contenu
+    loop {
+        let len_read = reader.read(&mut buf).await?;
+        taille_fichier += len_read;
+        if len_read == 0 { break; }
+        hacheur.update(&buf[..len_read]);
+    }
+
+    // Verifier transfert du fichier local
+    let fuuid_calcule = hacheur.finalize();
+    if fuuid_calcule == fuuid {
+        debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
+    } else {
+        Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
+    }
+
+    Ok(())
+}
+
+async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fuuid: &str)
+    -> Result<Response, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
+{
     let client_interne = gestionnaire.http_client_local.as_ref().expect("client reqwest fichiers locaux");
 
     let url_get_fichier = match &middleware.get_configuration_noeud().fichiers_url {
@@ -79,34 +120,11 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     let request_get = client_interne.get(url_get_fichier);
     let reponse = request_get.send().await?;
     debug!("transferer_fichier transferer_fichier Reponse : {:?}", reponse);
-    if ! reponse.status().is_success() {
+    if !reponse.status().is_success() {
         Err(format!("transfert_fichier.transferer_fichier Erreur ouverture fichier status {} : {}", reponse.status().as_u16(), reponse.url().as_str()))?
     }
 
-    let byte_stream = reponse.bytes_stream();
-    let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
-
-    let mut hacheur = Hacheur::builder()
-        .digester(Code::Blake2b512)
-        .base(Base::Base58Btc)
-        .build();
-    let mut buf = [0; 32768];
-    let mut taille_fichier = 0;
-    loop {
-        let len_read = reader.read(&mut buf).await?;
-        taille_fichier += len_read;
-        // debug!("Data lu : {:?}", len_read);
-        if len_read == 0 { break; }
-        hacheur.update(&buf[..len_read]);
-    }
-    let fuuid_calcule = hacheur.finalize();
-    if fuuid_calcule == fuuid {
-        debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
-    } else {
-        Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
-    }
-
-    Ok(())
+    Ok(reponse)
 }
 
 fn convert_err(err: reqwest::Error) -> std::io::Error {
