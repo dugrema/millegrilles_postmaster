@@ -24,7 +24,8 @@ use crate::requetes::consommer_requete;
 #[derive(Debug)]
 pub struct GestionnairePostmaster {
     // tx_pompe_messages: Mutex<Option<Sender<MessagePompe>>>,
-    pub client_fichiers: Option<Client>
+    pub http_client_local: Option<Client>,
+    pub http_client_remote: Option<Client>,
 }
 
 #[async_trait]
@@ -86,7 +87,8 @@ impl GestionnaireMessages for GestionnairePostmaster {
 impl Clone for GestionnairePostmaster {
     fn clone(&self) -> Self {
         GestionnairePostmaster {
-            client_fichiers: self.client_fichiers.clone()
+            http_client_local: self.http_client_local.clone(),
+            http_client_remote: self.http_client_remote.clone(),
         }
     }
 }
@@ -94,7 +96,8 @@ impl Clone for GestionnairePostmaster {
 impl GestionnairePostmaster {
     pub fn new() -> GestionnairePostmaster {
         return GestionnairePostmaster {
-            client_fichiers: None,
+            http_client_local: None,
+            http_client_remote: None,
         }
     }
 
@@ -153,7 +156,7 @@ pub async fn traiter_cedule<M>(gestionnaire: &GestionnairePostmaster, middleware
     Ok(())
 }
 
-pub fn new_client_fichiers(enveloppe_privee: &EnveloppePrivee) -> Result<Client, Box<dyn Error>> {
+pub fn new_client_local(enveloppe_privee: &EnveloppePrivee) -> Result<Client, Box<dyn Error>> {
     let ca_cert_pem = match enveloppe_privee.chaine_pem().last() {
         Some(cert) => cert.as_str(),
         None => Err(format!("transfert_fichier.transferer_fichier Certificat CA manquant"))?,
@@ -161,7 +164,7 @@ pub fn new_client_fichiers(enveloppe_privee: &EnveloppePrivee) -> Result<Client,
     let root_ca = reqwest::Certificate::from_pem(ca_cert_pem.as_bytes())?;
     let identity = reqwest::Identity::from_pem(enveloppe_privee.clecert_pem.as_bytes())?;
 
-    let client_interne = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .add_root_certificate(root_ca)
         .identity(identity)
         .https_only(true)
@@ -170,5 +173,14 @@ pub fn new_client_fichiers(enveloppe_privee: &EnveloppePrivee) -> Result<Client,
         .http2_adaptive_window(true)
         .build()?;
 
-    Ok(client_interne)
+    Ok(client)
+}
+
+pub fn new_client_remote() -> Result<Client, Box<dyn Error>> {
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .use_rustls_tls()
+        .http2_adaptive_window(true)
+        .build()?;
+    Ok(client)
 }

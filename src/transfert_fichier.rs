@@ -16,11 +16,12 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 
 use crate::constantes::*;
-use crate::gestionnaire::{GestionnairePostmaster, new_client_fichiers};
+use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
 
-pub async fn uploader_attachment<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
-                                    -> Result<(), Box<dyn Error>>
+pub async fn uploader_attachment<M>(
+    middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
+    -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
     debug!("uploader_attachment Attachment fuuid {}", fuuid);
@@ -33,13 +34,19 @@ pub async fn uploader_attachment<M>(middleware: &M, gestionnaire: &GestionnaireP
     }
 
     // Creer pipeline d'upload vers le serveur distant.
-    transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await?;
+    let evenement = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await {
+        Ok(()) => {
+            // Emettre evenement de confirmation d'upload complete
+            EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), 500)
+        },
+        Err(e) => {
+            error!("uploader_attachment Erreur transferer fichier : {:?}", e);
+            // Emettre evenement de confirmation d'upload complete
+            EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 201)
+        }
+    };
 
-    { // Emettre evenement de confirmation d'upload complete
-        let evenement = EvenementUploadAttachment::complete(
-            uuid_message.into(), idmg.into(), fuuid.into(), 201);
-        emettre_evenement_upload(middleware, evenement).await?;
-    }
+    emettre_evenement_upload(middleware, evenement).await?;
 
     Ok(())
 }
@@ -57,7 +64,7 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
-    let client_interne = gestionnaire.client_fichiers.as_ref().expect("client reqwest fichiers locaux");
+    let client_interne = gestionnaire.http_client_local.as_ref().expect("client reqwest fichiers locaux");
 
     let url_get_fichier = match &middleware.get_configuration_noeud().fichiers_url {
         Some(u) => {
@@ -73,7 +80,7 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     let reponse = request_get.send().await?;
     debug!("transferer_fichier transferer_fichier Reponse : {:?}", reponse);
     if ! reponse.status().is_success() {
-        Err(format!("transfert_fichier.transferer_fichier Erreur ouverture fichier (source), status {}", reponse.status().as_u16()))?
+        Err(format!("transfert_fichier.transferer_fichier Erreur ouverture fichier status {} : {}", reponse.status().as_u16(), reponse.url().as_str()))?
     }
 
     let byte_stream = reponse.bytes_stream();

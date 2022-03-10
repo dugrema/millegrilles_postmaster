@@ -7,7 +7,7 @@ use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, Entete};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
-use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_TERMINE};
+use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_ERREUR, CODE_UPLOAD_TERMINE};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentMessage {
@@ -130,6 +130,18 @@ impl EvenementUploadAttachment {
             http_status: Some(http_status),
             retry_after: None,
             complete: true,
+        }
+    }
+
+    pub fn erreur(uuid_message: String, idmg: String, fuuid: String, http_status: u16) -> Self {
+        EvenementUploadAttachment {
+            uuid_message,
+            idmg,
+            fuuid,
+            code: CODE_UPLOAD_ERREUR,
+            http_status: Some(http_status),
+            retry_after: None,
+            complete: false,
         }
     }
 }

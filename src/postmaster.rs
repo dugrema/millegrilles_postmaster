@@ -17,7 +17,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 
-use crate::gestionnaire::{GestionnairePostmaster, new_client_fichiers};
+use crate::gestionnaire::*;
 
 static mut POSTMASTER: TypeGestionnaire = TypeGestionnaire::None;
 
@@ -50,12 +50,12 @@ fn charger_gestionnaire(gestionnaire: GestionnairePostmaster) -> &'static TypeGe
 // async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
 async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
 
-    let mut gestionnaire1 = GestionnairePostmaster::new();
+    let mut gestionnaire_mut = GestionnairePostmaster::new();
 
     // Recuperer configuration des Q de tous les domaines
     let queues = {
         let mut queues: Vec<QueueType> = Vec::new();
-        queues.extend(gestionnaire1.preparer_queues());
+        queues.extend(gestionnaire_mut.preparer_queues());
         debug!("Queues a preparer : {:?}", queues);
         queues
     };
@@ -82,12 +82,19 @@ async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
     let middleware = middleware_hooks.middleware;
 
     // Wiring final du gestionnaire
-    let g2 = match new_client_fichiers(middleware.get_enveloppe_privee().as_ref()) {
-        Ok(g) => g,
-        Err(e) => panic!("Erreur creation client reqwest pour fichiers locaux")
+    let gestionnaire_static = match new_client_local(middleware.get_enveloppe_privee().as_ref()) {
+        Ok(client_local) => {
+            gestionnaire_mut.http_client_local = Some(client_local);
+            match new_client_remote() {
+                Ok(client_remote) => {
+                    gestionnaire_mut.http_client_remote = Some(client_remote);
+                    charger_gestionnaire(gestionnaire_mut)
+                },
+                Err(e) => panic!("Erreur creation client reqwest pour fichiers remote : {:?}", e)
+            }
+        },
+        Err(e) => panic!("Erreur creation client reqwest pour fichiers locaux : {:?}", e)
     };
-    gestionnaire1.client_fichiers = Some(g2);
-    let gestionnaire_static = charger_gestionnaire(gestionnaire1);
 
     // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
