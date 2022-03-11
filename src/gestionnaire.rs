@@ -181,6 +181,7 @@ pub fn new_client_remote() -> Result<Client, Box<dyn Error>> {
         .https_only(true)
         .use_rustls_tls()
         .http2_adaptive_window(true)
+        .danger_accept_invalid_certs(true)  // Millegrille tierce
         .build()?;
     Ok(client)
 }

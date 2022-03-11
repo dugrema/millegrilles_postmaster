@@ -12,13 +12,15 @@ use millegrilles_common_rust::futures::stream::TryStreamExt;
 use millegrilles_common_rust::hachages::Hacheur;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multihash::Code;
-use millegrilles_common_rust::reqwest::Response;
+use millegrilles_common_rust::reqwest::{Body, Request, Response, Url};
 // for map_err
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 
 use crate::constantes::*;
 use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
+
+const BUFFER_SIZE: u32 = 131072;
 
 pub async fn uploader_attachment<M>(
     middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
@@ -65,38 +67,44 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
-    // Ouvrir reader aupres de la millegrille locale
-    let mut reader = {
-        let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
-        let byte_stream = reponse_local.bytes_stream();
-        StreamReader::new(byte_stream.map_err(convert_err))
-    };
+    // // Ouvrir reader aupres de la millegrille locale
+    // let mut reader = {
+    //     let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
+    //     let byte_stream = reponse_local.bytes_stream();
+    //     StreamReader::new(byte_stream.map_err(convert_err))
+    // };
+
+    // Preparer verification du hachage
+    // let mut hacheur = Hacheur::builder()
+    //     .digester(Code::Blake2b512)
+    //     .base(Base::Base58Btc)
+    //     .build();
 
     // Ouvrir writer aupres de la millegrille distante
-
-
-    let mut hacheur = Hacheur::builder()
-        .digester(Code::Blake2b512)
-        .base(Base::Base58Btc)
-        .build();
-    let mut buf = [0; 32768];
-    let mut taille_fichier = 0;
+    let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
+    let byte_stream = reponse_local.bytes_stream();
+    let body_stream = reqwest::Body::wrap_stream(byte_stream);
+    let url = "https://mg-dev5.maple.maceroc.com/messagerie";
+    let client_put = connecter_remote(middleware, gestionnaire, url, fuuid, body_stream).await?;
+    debug!("Reponse client put : {:?}", client_put);
 
     // Streamer le contenu
-    loop {
-        let len_read = reader.read(&mut buf).await?;
-        taille_fichier += len_read;
-        if len_read == 0 { break; }
-        hacheur.update(&buf[..len_read]);
-    }
+    // let mut buf = [0; BUFFER_SIZE];
+    // let mut taille_fichier = 0;
+    // loop {
+    //     let len_read = reader.read(&mut buf).await?;
+    //     taille_fichier += len_read;
+    //     if len_read == 0 { break; }
+    //     hacheur.update(&buf[..len_read]);
+    // }
 
     // Verifier transfert du fichier local
-    let fuuid_calcule = hacheur.finalize();
-    if fuuid_calcule == fuuid {
-        debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
-    } else {
-        Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
-    }
+    // let fuuid_calcule = hacheur.finalize();
+    // if fuuid_calcule == fuuid {
+    //     debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
+    // } else {
+    //     Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
+    // }
 
     Ok(())
 }
@@ -125,6 +133,24 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
     }
 
     Ok(reponse)
+}
+
+async fn connecter_remote<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str, stream: Body)
+    -> Result<Response, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
+{
+    let client = gestionnaire.http_client_remote.as_ref().expect("client reqwest fichiers remote");
+
+    let mut url_put_fichier = Url::parse(url)?;
+    let url_liste_fichiers_str = format!("{}/poster/{}", url_put_fichier.path(), fuuid);
+    url_put_fichier.set_path(url_liste_fichiers_str.as_str());
+
+    let response = client.put(url_put_fichier)
+        .header("Content-Type", "application/stream")
+        .body(stream)
+        .send().await?;
+
+    Ok(response)
 }
 
 fn convert_err(err: reqwest::Error) -> std::io::Error {
