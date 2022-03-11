@@ -67,46 +67,26 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
-    // // Ouvrir reader aupres de la millegrille locale
-    // let mut reader = {
-    //     let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
-    //     let byte_stream = reponse_local.bytes_stream();
-    //     StreamReader::new(byte_stream.map_err(convert_err))
-    // };
+    for app in &fiche.application {
+        let url = app.url.as_str();
 
-    // Preparer verification du hachage
-    // let mut hacheur = Hacheur::builder()
-    //     .digester(Code::Blake2b512)
-    //     .base(Base::Base58Btc)
-    //     .build();
+        // Ouvrir reader aupres de la millegrille locale
+        let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
 
-    // Ouvrir writer aupres de la millegrille distante
-    let reponse_local = connecter_local(middleware, gestionnaire, fuuid).await?;
-    let byte_stream = reponse_local.bytes_stream();
-    let body_stream = reqwest::Body::wrap_stream(byte_stream);
-    let url = "https://mg-dev5.maple.maceroc.com/messagerie";
-    let client_put = connecter_remote(middleware, gestionnaire, url, fuuid, body_stream).await?;
-    debug!("Reponse client put : {:?}", client_put);
+        // Ouvrir writer aupres de la millegrille distante
+        let body_stream = reqwest::Body::wrap_stream(reponse_local.bytes_stream());
+        let client_put = connecter_remote(gestionnaire, url, fuuid, body_stream).await?;
+        debug!("Reponse client put : {:?}", client_put);
 
-    // Streamer le contenu
-    // let mut buf = [0; BUFFER_SIZE];
-    // let mut taille_fichier = 0;
-    // loop {
-    //     let len_read = reader.read(&mut buf).await?;
-    //     taille_fichier += len_read;
-    //     if len_read == 0 { break; }
-    //     hacheur.update(&buf[..len_read]);
-    // }
+        let status_code = client_put.status().as_u16();
+        if status_code >= 200 && status_code < 300 {
+            return Ok(())
+        } else {
+            info!("Erreur PUT fichier {}, code : {}", fuuid, status_code);
+        }
+    }
 
-    // Verifier transfert du fichier local
-    // let fuuid_calcule = hacheur.finalize();
-    // if fuuid_calcule == fuuid {
-    //     debug!("transferer_fichier Fuuid calcule: {}, Taille totale : {}", fuuid_calcule, taille_fichier);
-    // } else {
-    //     Err(format!("transfert_fichier.transferer_fichier Erreur transfert fichier fuuid : {}, mismatch contenu bytes", fuuid))?;
-    // }
-
-    Ok(())
+    Err(format!("Erreur transfert fichier, aucun upload succes"))?
 }
 
 async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fuuid: &str)
@@ -135,9 +115,8 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
     Ok(reponse)
 }
 
-async fn connecter_remote<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str, stream: Body)
+async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str, stream: Body)
     -> Result<Response, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
     let client = gestionnaire.http_client_remote.as_ref().expect("client reqwest fichiers remote");
 
@@ -154,6 +133,5 @@ async fn connecter_remote<M>(middleware: &M, gestionnaire: &GestionnairePostmast
 }
 
 fn convert_err(err: reqwest::Error) -> std::io::Error {
-    // std::io::Error::from(Err(format!("convert_err Erreur lecture reqwest : {:?}", err)));
     std::io::Error::new(ErrorKind::Other, err)
 }
