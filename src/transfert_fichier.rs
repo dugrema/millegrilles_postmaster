@@ -97,7 +97,7 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
         };
         debug!("Traitement fichier taille : {:?}", taille_fichier);
         let mut handler = UploadHandler { taille: taille_fichier };
-        let reponse = handler.upload(gestionnaire, response_local, fuuid, url).await?;
+        handler.upload(gestionnaire, response_local, fuuid, url).await?;
 
         // let reponse: Response = if multiple {
         //     todo!("Fix me")
@@ -107,14 +107,16 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
         //     connecter_remote(gestionnaire, url, fuuid, body_stream).await?
         // };
 
-        debug!("Reponse client put : {:?}", reponse);
+        // debug!("Reponse client put : {:?}", reponse);
+        //
+        // let status_code = reponse.status().as_u16();
+        // if status_code >= 200 && status_code < 300 {
+        //     return Ok(())
+        // } else {
+        //     info!("Erreur PUT fichier {}, code : {}", fuuid, status_code);
+        // }
 
-        let status_code = reponse.status().as_u16();
-        if status_code >= 200 && status_code < 300 {
-            return Ok(())
-        } else {
-            info!("Erreur PUT fichier {}, code : {}", fuuid, status_code);
-        }
+        return Ok(())
     }
 
     Err(format!("Erreur transfert fichier, aucun upload succes"))?
@@ -175,7 +177,7 @@ struct UploadHandler {
 }
 
 impl UploadHandler {
-    async fn upload(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<Response, Box<dyn Error>> {
+    async fn upload(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
         let split = match self.taille { Some(t) => t >= MESSAGE_SIZE_LIMIT, None => true };
 
         match split {
@@ -184,13 +186,16 @@ impl UploadHandler {
         }
     }
 
-    async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<Response, Box<dyn Error>> {
+    async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
         let body_stream = reqwest::Body::wrap_stream(response_local.bytes_stream());
         let reponse = connecter_remote(gestionnaire, url, fuuid, None, body_stream).await?;
-        Ok(reponse)
+        if ! reponse.status().is_success() {
+            Err(format!("Erreur upload code {}", reponse.status().as_u16()))?
+        }
+        Ok(())
     }
 
-    async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<Response, Box<dyn Error>> {
+    async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
         let byte_stream = response_local.bytes_stream();
         let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
 
@@ -201,12 +206,17 @@ impl UploadHandler {
         loop {
             let len_read = reader.read(&mut buf).await?;
 
+            // debug!("Data lu : {:?}", len_read);
+            if len_read == 0 { break; }
+
             let taille_buf = buf_bytes.len();
             if taille_buf + len_read < MESSAGE_SIZE_LIMIT {
                 buf_bytes.extend(&buf[..len_read]);
             } else {
                 // Split
-                let fin_read = MESSAGE_SIZE_LIMIT - taille_buf;
+                let excedent = taille_buf + len_read - MESSAGE_SIZE_LIMIT;
+                let fin_read = len_read - excedent;
+                debug!("Position {}, taille_buf {}, len_read {}, excedent {}, fin_read {}", position, taille_buf, len_read, excedent, fin_read);
                 buf_bytes.extend(&buf[..fin_read]);
 
                 let position_courante = position;
@@ -214,26 +224,43 @@ impl UploadHandler {
 
                 debug!("Uploader buffer len {:?}", buf_bytes.len());
                 let reponse_part = self.upload_part(gestionnaire, fuuid, url, position_courante, buf_bytes).await?;
-                if ! reponse_part.status().is_success() {
+                let status_code = reponse_part.status().as_u16();
+                if status_code == 200 {
+                    match reponse_part.json::<ResponsePutFichierPartiel>().await {
+                        Ok(r) => {
+                            if r.ok {
+                                if let Some(code) = r.code {
+                                    if code == 7 {
+                                        // Le fichier existe deja, on retourne la reponse. OK.
+                                        return Ok(())
+                                    }
+                                }
+                            }
+                        },
+                        Err(e) => ()
+                    };
+                } else if ! reponse_part.status().is_success() {
                     Err(format!("transfert_fichier.upload_split Echec upload fichier split {} : http status {}", fuuid, reponse_part.status().as_u16()))?;
                 }
 
                 // Remettre reste du buffer
                 buf_bytes = Vec::new();
                 buf_bytes.reserve(MESSAGE_SIZE_LIMIT);
-                buf_bytes.extend(&buf[fin_read..]);
+                buf_bytes.extend(&buf[fin_read..len_read]);
             }
 
-            // debug!("Data lu : {:?}", len_read);
-            if len_read == 0 { break; }
         }
 
         if buf_bytes.len() > 0 {
-            debug!("Emttre derniere partie du fichier len: {:?}", buf_bytes.len());
+            debug!("upload_split Emttre derniere partie du fichier len: {:?}", buf_bytes.len());
             self.upload_part(gestionnaire, fuuid, url, position, buf_bytes).await?;
         }
 
-        upload_post_final(gestionnaire, url, fuuid).await
+        let reponse_finale = upload_post_final(gestionnaire, url, fuuid).await?;
+        match reponse_finale.status().is_success() {
+            true => Ok(()),
+            false => Err(format!("transfert_fichier.upload_split Erreur POST upload fichier {}", reponse_finale.status().as_u16()))?
+        }
     }
 
     async fn upload_part(&self, gestionnaire: &GestionnairePostmaster, fuuid: &str, url: &str, position: usize, buffer: Vec<u8>) -> Result<Response, Box<dyn Error>> {

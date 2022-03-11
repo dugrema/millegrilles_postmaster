@@ -145,3 +145,10 @@ impl EvenementUploadAttachment {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResponsePutFichierPartiel {
+    pub ok: bool,
+    pub code: Option<u32>,
+    pub status: Option<usize>,
+}
