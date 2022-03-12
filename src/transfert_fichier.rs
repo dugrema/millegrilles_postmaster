@@ -27,7 +27,7 @@ use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
 
 const BUFFER_SIZE: u32 = 131072;
-const MESSAGE_SIZE_LIMIT: usize = 200 * 1024;
+const MESSAGE_SIZE_LIMIT: usize = 1 * 1024 * 1024;
 
 pub async fn uploader_attachment<M>(
     middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
