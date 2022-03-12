@@ -45,14 +45,14 @@ pub async fn uploader_attachment<M>(
 
     // Creer pipeline d'upload vers le serveur distant.
     let evenement = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await {
-        Ok(()) => {
+        Ok(status_code) => {
             // Emettre evenement de confirmation d'upload complete
-            EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), 500)
+            EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), status_code)
         },
         Err(e) => {
             error!("uploader_attachment Erreur transferer fichier : {:?}", e);
-            // Emettre evenement de confirmation d'upload complete
-            EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 201)
+            // Emettre evenement d'erreur d'upload de fichier (incomplet, retry plus tard)
+            EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 500)
         }
     };
 
@@ -71,7 +71,7 @@ async fn emettre_evenement_upload<M>(middleware: &M, evenement: EvenementUploadA
 }
 
 async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
-    -> Result<(), Box<dyn Error>>
+    -> Result<u16, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
     for app in &fiche.application {
@@ -97,26 +97,9 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
         };
         debug!("Traitement fichier taille : {:?}", taille_fichier);
         let mut handler = UploadHandler { taille: taille_fichier };
-        handler.upload(gestionnaire, response_local, fuuid, url).await?;
+        let status_code = handler.upload(gestionnaire, response_local, fuuid, url).await?;
 
-        // let reponse: Response = if multiple {
-        //     todo!("Fix me")
-        // } else {
-        //     // Transfert simple et direct. Ouvrir writer aupres de la millegrille distante
-        //     let body_stream = reqwest::Body::wrap_stream(reponse_local.bytes_stream());
-        //     connecter_remote(gestionnaire, url, fuuid, body_stream).await?
-        // };
-
-        // debug!("Reponse client put : {:?}", reponse);
-        //
-        // let status_code = reponse.status().as_u16();
-        // if status_code >= 200 && status_code < 300 {
-        //     return Ok(())
-        // } else {
-        //     info!("Erreur PUT fichier {}, code : {}", fuuid, status_code);
-        // }
-
-        return Ok(())
+        return Ok(status_code)
     }
 
     Err(format!("Erreur transfert fichier, aucun upload succes"))?
@@ -177,7 +160,7 @@ struct UploadHandler {
 }
 
 impl UploadHandler {
-    async fn upload(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
+    async fn upload(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
         let split = match self.taille { Some(t) => t >= MESSAGE_SIZE_LIMIT, None => true };
 
         match split {
@@ -186,16 +169,16 @@ impl UploadHandler {
         }
     }
 
-    async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
+    async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
         let body_stream = reqwest::Body::wrap_stream(response_local.bytes_stream());
         let reponse = connecter_remote(gestionnaire, url, fuuid, None, body_stream).await?;
         if ! reponse.status().is_success() {
             Err(format!("Erreur upload code {}", reponse.status().as_u16()))?
         }
-        Ok(())
+        Ok(reponse.status().as_u16())
     }
 
-    async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<(), Box<dyn Error>> {
+    async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
         let byte_stream = response_local.bytes_stream();
         let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
 
@@ -232,7 +215,7 @@ impl UploadHandler {
                                 if let Some(code) = r.code {
                                     if code == 7 {
                                         // Le fichier existe deja, on retourne la reponse. OK.
-                                        return Ok(())
+                                        return Ok(200)
                                     }
                                 }
                             }
@@ -258,7 +241,7 @@ impl UploadHandler {
 
         let reponse_finale = upload_post_final(gestionnaire, url, fuuid).await?;
         match reponse_finale.status().is_success() {
-            true => Ok(()),
+            true => Ok(reponse_finale.status().as_u16()),
             false => Err(format!("transfert_fichier.upload_split Erreur POST upload fichier {}", reponse_finale.status().as_u16()))?
         }
     }
