@@ -546,7 +546,7 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "tokio",
- "tokio-util 0.6.9",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1140,7 +1140,7 @@ dependencies = [
  "indexmap",
  "slab",
  "tokio",
- "tokio-util 0.6.9",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1499,7 +1499,7 @@ checksum = "308cc39be01b73d0d18f82a0e7b2a3df85245f84af96fdddc5d202d27e47b86a"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2022.1.0"
+version = "2022.2.0"
 dependencies = [
  "aead",
  "async-recursion",
@@ -1534,7 +1534,7 @@ dependencies = [
  "tokio",
  "tokio-amqp",
  "tokio-stream",
- "tokio-util 0.7.0",
+ "tokio-util",
  "url",
  "uuid",
  "x509-parser",
@@ -1551,7 +1551,6 @@ dependencies = [
  "log",
  "millegrilles_common_rust",
  "serde",
- "tokio-util 0.7.0",
 ]
 
 [[package]]
@@ -1659,7 +1658,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls 0.22.0",
- "tokio-util 0.6.9",
+ "tokio-util",
  "trust-dns-proto",
  "trust-dns-resolver",
  "typed-builder",
@@ -2206,7 +2205,7 @@ dependencies = [
  "pin-project-lite",
  "sha1",
  "tokio",
- "tokio-util 0.6.9",
+ "tokio-util",
  "url",
 ]
 
@@ -2279,7 +2278,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls 0.23.2",
- "tokio-util 0.6.9",
+ "tokio-util",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2873,20 +2872,6 @@ name = "tokio-util"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e99e1983e5d376cd8eb4b66604d2e99e79f5bd988c3055891dcd8c9e2604cc0"
-dependencies = [
- "bytes 1.1.0",
- "futures-core",
- "futures-sink",
- "log",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
 dependencies = [
  "bytes 1.1.0",
  "futures-core",
