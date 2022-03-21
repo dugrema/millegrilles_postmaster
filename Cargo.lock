@@ -2201,10 +2201,12 @@ dependencies = [
  "dtoa",
  "futures-util",
  "itoa 0.4.8",
+ "native-tls",
  "percent-encoding",
  "pin-project-lite",
  "sha1",
  "tokio",
+ "tokio-native-tls",
  "tokio-util",
  "url",
 ]
