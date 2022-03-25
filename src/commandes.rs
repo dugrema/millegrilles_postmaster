@@ -135,15 +135,18 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         for app_config in &destination.fiche.application {
             let url_app = app_config.url.as_str();
             let url_poster = format!("{}/poster", url_app);
-            debug!("Poster message vers {}", url_poster);
-            let res = client.post(url_poster)
+            info!("Poster message vers {}", url_poster);
+            let res = client.post(url_poster.clone())
                 .body(message_bytes.clone())
                 .send()
                 .await?;
             debug!("Reponse post HTTP : {:?}", res);
             if res.status().is_success() {
+                info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
                 status_reponse = Some(res.status());
                 break;  // On a reussi le transfert, pas besoin de poursuivre
+            } else {
+                warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
             }
         }
 
