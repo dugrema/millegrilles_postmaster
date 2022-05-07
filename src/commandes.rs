@@ -71,6 +71,8 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
+    debug!("poster_message Poster {:?}", message_poster);
+
     let message_mappe: DocumentMessage = {
         let value = serde_json::to_value(message_poster.message.clone())?;
         serde_json::from_value(value)?
@@ -97,6 +99,8 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         .connect_timeout(Duration::from_secs(10))
         .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
         .build()?;
+
+    debug!("commandes.poster_message Emettre message vers destinations {:?}", message_poster.destinations);
 
     for destination in message_poster.destinations {
 
@@ -223,7 +227,7 @@ async fn get_fiche<M>(middleware: &M, message_poster: &CommandePousserAttachment
     let routage_topologie = RoutageMessageAction::builder(
         DOMAINE_TOPOLOGIE, REQUETE_APPLICATIONS_TIERS)
         .build();
-    let requete_topologie = RequeteTopologieFicheApplication { idmgs: vec![idmg.into()], application: "messagerie".into() };
+    let requete_topologie = RequeteTopologieFicheApplication { idmgs: vec![idmg.into()], application: "messagerie_web".into() };
     let reponse_topologie = middleware.transmettre_requete(routage_topologie, &requete_topologie).await?;
 
     debug!("get_fiche Reponse fiche topologie : {:?}", reponse_topologie);

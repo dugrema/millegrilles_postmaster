@@ -114,7 +114,7 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
     let url_get_fichier = match &middleware.get_configuration_noeud().fichiers_url {
         Some(u) => {
             let mut url_get_fichier = u.clone();
-            let url_liste_fichiers_str = format!("/fichiers/{}", fuuid);
+            let url_liste_fichiers_str = format!("/fichiers_transfert/{}", fuuid);
             url_get_fichier.set_path(url_liste_fichiers_str.as_str());
             url_get_fichier
         },
