@@ -9,6 +9,7 @@ pub const COMMANDE_POUSSER_ATTACHMENT: &str = "pousserAttachment";
 pub const COMMANDE_PROCHAIN_ATTACHMENT: &str = "prochainAttachment";
 
 pub const EVENEMENT_UPLOAD_ATTACHMENT: &str = "evenementAttachment";
+pub const COMMANDE_UPLOAD_ATTACHMENT: &str = "uploadAttachment";
 
 pub const NOM_Q_VOLATILS: &str = "postmaster/volatils";
 pub const NOM_Q_TRIGGERS: &str = "postmaster/triggers";

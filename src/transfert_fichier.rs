@@ -8,6 +8,7 @@ use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{futures_util, reqwest};
+use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive};
 use millegrilles_common_rust::futures::Stream;
 use millegrilles_common_rust::verificateur::VerificateurMessage;
 use millegrilles_common_rust::futures::stream::TryStreamExt;
@@ -44,19 +45,25 @@ pub async fn uploader_attachment<M>(
     }
 
     // Creer pipeline d'upload vers le serveur distant.
-    let evenement = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await {
+    let resultat = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await {
         Ok(status_code) => {
+            debug!("uploader_attachment Complete, status {}", status_code);
             // Emettre evenement de confirmation d'upload complete
-            EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), status_code)
+            let commande = EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), status_code);
+            Ok(commande)
         },
         Err(e) => {
             error!("uploader_attachment Erreur transferer fichier : {:?}", e);
             // Emettre evenement d'erreur d'upload de fichier (incomplet, retry plus tard)
-            EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 500)
+            Err(EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 500))
         }
     };
 
-    emettre_evenement_upload(middleware, evenement).await?;
+    // Traiter evenement extrait (note : Box dyn n'est pas send, on ne peut pas faire await dans le match precedent)
+    match resultat {
+        Ok(c) => transmettre_confirmation_upload(middleware, c).await?,
+        Err(e) => emettre_evenement_upload(middleware, e).await?
+    }
 
     Ok(())
 }
@@ -65,8 +72,21 @@ async fn emettre_evenement_upload<M>(middleware: &M, evenement: EvenementUploadA
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages
 {
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT).build();
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_UPLOAD_ATTACHMENT)
+        .exchanges(vec![L1Public])
+        .build();
     middleware.emettre_evenement(routage, &evenement).await?;
+    Ok(())
+}
+
+async fn transmettre_confirmation_upload<M>(middleware: &M, evenement: EvenementUploadAttachment)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages
+{
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, COMMANDE_UPLOAD_ATTACHMENT)
+        .exchanges(vec![L1Public])
+        .build();
+    middleware.transmettre_commande(routage, &evenement, false).await?;
     Ok(())
 }
 
