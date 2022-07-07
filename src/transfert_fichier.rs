@@ -141,6 +141,7 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
         None => Err(format!("transfert_fichier.transferer_fichier URL fichiers n'est pas disponible"))?
     };
 
+    debug!("connecter_local Creer pipe vers {:?}", url_get_fichier.as_str());
     let request_get = client_interne.get(url_get_fichier);
     let reponse = request_get.send().await?;
     debug!("transferer_fichier transferer_fichier Reponse : {:?}", reponse);
