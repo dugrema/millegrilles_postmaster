@@ -23,12 +23,16 @@ static mut POSTMASTER: TypeGestionnaire = TypeGestionnaire::None;
 
 pub async fn run() {
     // Wiring
-    let (mut futures, _) = build().await;
+    let futures = build().await;
 
     // Run
-    info!("domaines_messagerie: Demarrage traitement, top level threads {}", futures.len());
+    executer(futures).await
+}
+
+async fn executer(mut futures: FuturesUnordered<JoinHandle<()>>) {
+    info!("postmaster: Demarrage traitement, top level threads {}", futures.len());
     let arret = futures.next().await;
-    info!("domaines_messagerie: Fermeture du contexte, task daemon terminee : {:?}", arret);
+    info!("postmaster: Fermeture du contexte, task daemon terminee : {:?}", arret);
 }
 
 /// Enum pour distinger les types de gestionnaires.
@@ -47,8 +51,7 @@ fn charger_gestionnaire(gestionnaire: GestionnairePostmaster) -> &'static TypeGe
     }
 }
 
-// async fn build(gestionnaire: &'static TypeGestionnaire) -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
-async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
+async fn build() -> FuturesUnordered<JoinHandle<()>> {
 
     let mut gestionnaire_mut = GestionnairePostmaster::new();
 
@@ -78,7 +81,7 @@ async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
         Some(Mutex::new(callbacks))
     };
 
-    let middleware_hooks = preparer_middleware_message(queues, listeners, Securite::L1Public);
+    let middleware_hooks = preparer_middleware_message();
     let middleware = middleware_hooks.middleware;
 
     // Wiring final du gestionnaire
@@ -99,35 +102,16 @@ async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
     // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
     {
-        let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-
         // ** Gestionnaires **
         {
-            let (
-                routing_g,
-                futures_g,
-            ) = match gestionnaire_static {
+            let futures_g = match gestionnaire_static {
                 TypeGestionnaire::PostmasterPublic(g) => {
                     g.preparer_threads(middleware.clone()).await.expect("gestionnaire")
                 },
-                TypeGestionnaire::None => (HashMap::new(), FuturesUnordered::new()),
+                TypeGestionnaire::None => FuturesUnordered::new(),
             };
             futures.extend(futures_g);        // Deplacer vers futures globaux
-            map_senders.extend(routing_g);    // Deplacer vers mapping global
         }
-
-        // ** Wiring global **
-
-        // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
-        futures.push(spawn(
-            consommer(middleware.clone(), middleware_hooks.rx_messages_verifies, map_senders.clone())
-        ));
-        futures.push(spawn(
-            consommer(middleware.clone(), middleware_hooks.rx_messages_verif_reply, map_senders.clone())
-        ));
-        futures.push(spawn(
-            consommer(middleware.clone(), middleware_hooks.rx_triggers, map_senders.clone())
-        ));
 
         // ** Thread d'entretien **
         futures.push(spawn(entretien(middleware.clone(), rx_entretien, vec![gestionnaire_static])));
@@ -140,7 +124,7 @@ async fn build() -> (FuturesUnordered<JoinHandle<()>>, Arc<MiddlewareMessage>) {
 
     debug!("Futures a demarrer : {:?}", futures);
 
-    (futures, middleware)
+    futures
 }
 
 async fn consommer<M>(

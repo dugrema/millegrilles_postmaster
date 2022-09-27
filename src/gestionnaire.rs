@@ -128,6 +128,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
             routing_keys: rk_volatils,
             ttl: DEFAULT_Q_TTL.into(),
             durable: true,
+            autodelete: false,
         }
     ));
 
