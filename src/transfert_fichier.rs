@@ -2,6 +2,7 @@ use log::{debug, error, info, warn};
 use std::error::Error;
 use std::io::ErrorKind;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -30,7 +31,7 @@ use crate::constantes::*;
 use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
 
-const BUFFER_SIZE: u32 = 32*1024;
+const BUFFER_SIZE: u32 = 128*1024;
 const MESSAGE_SIZE_LIMIT: usize = 5 * 1024 * 1024;
 
 pub async fn uploader_attachment<M>(
@@ -194,73 +195,61 @@ impl UploadHandler {
     }
 
     async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
-        let body_stream = reqwest::Body::wrap_stream(response_local.bytes_stream());
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0})));
+        let iter = read_to_substream(stream_state_rc.clone());
+        let body_stream = Body::wrap_stream(iter);
+
         let reponse = connecter_remote(gestionnaire, url, fuuid, None, body_stream).await?;
+
         if ! reponse.status().is_success() {
             Err(format!("Erreur upload code {}", reponse.status().as_u16()))?
         }
+
         Ok(reponse.status().as_u16())
     }
 
     async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
-        let byte_stream = response_local.bytes_stream();
-        let mut reader = StreamReader::new(byte_stream.map_err(convert_err));
 
-        let mut buf = [0; 32768];
-        let mut buf_bytes: Vec<u8> = Vec::new();
-        buf_bytes.reserve(MESSAGE_SIZE_LIMIT);
-        let mut position: usize = 0;
-        loop {
-            let len_read = reader.read(&mut buf).await?;
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0})));
+        loop  {
+            let position_courante = {
+                // Extraire position courante
+                let guard = stream_state_rc.lock().expect("lock");
+                guard.as_ref().expect("stream state").position
+            };
+            let iter = read_to_substream(stream_state_rc.clone());
+            let body = Body::wrap_stream(iter);
 
-            // debug!("Data lu : {:?}", len_read);
-            if len_read == 0 { break; }
+            debug!("upload_split Uploader part position {}", position_courante);
+            // let reponse_part = self.upload_part(gestionnaire, fuuid, url, position_courante, body).await?;
+            let reponse_part = connecter_remote(gestionnaire, url, fuuid, Some(position_courante), body).await?;
 
-            let taille_buf = buf_bytes.len();
-            if taille_buf + len_read < MESSAGE_SIZE_LIMIT {
-                buf_bytes.extend(&buf[..len_read]);
-            } else {
-                // Split
-                let excedent = taille_buf + len_read - MESSAGE_SIZE_LIMIT;
-                let fin_read = len_read - excedent;
-                debug!("Position {}, taille_buf {}, len_read {}, excedent {}, fin_read {}", position, taille_buf, len_read, excedent, fin_read);
-                buf_bytes.extend(&buf[..fin_read]);
-
-                let position_courante = position;
-                position += buf_bytes.len();  // Incrementer position courante
-
-                debug!("Uploader buffer len {:?}", buf_bytes.len());
-                let reponse_part = self.upload_part(gestionnaire, fuuid, url, position_courante, buf_bytes).await?;
-                let status_code = reponse_part.status().as_u16();
-                if status_code == 200 {
-                    match reponse_part.json::<ResponsePutFichierPartiel>().await {
-                        Ok(r) => {
-                            if r.ok {
-                                if let Some(code) = r.code {
-                                    if code == 7 {
-                                        // Le fichier existe deja, on retourne la reponse. OK.
-                                        return Ok(200)
-                                    }
+            let status_code = reponse_part.status().as_u16();
+            if status_code == 200 {
+                match reponse_part.json::<ResponsePutFichierPartiel>().await {
+                    Ok(r) => {
+                        if r.ok {
+                            if let Some(code) = r.code {
+                                if code == 7 {
+                                    // Le fichier existe deja, on retourne la reponse. OK.
+                                    return Ok(200)
                                 }
                             }
-                        },
-                        Err(e) => ()
-                    };
-                } else if ! reponse_part.status().is_success() {
-                    Err(format!("transfert_fichier.upload_split Echec upload fichier split {} : http status {}", fuuid, reponse_part.status().as_u16()))?;
-                }
-
-                // Remettre reste du buffer
-                buf_bytes = Vec::new();
-                buf_bytes.reserve(MESSAGE_SIZE_LIMIT);
-                buf_bytes.extend(&buf[fin_read..len_read]);
+                        }
+                    },
+                    Err(e) => error!("upload_split Erreur verification reponse json : {:?}", e)
+                };
+            } else if ! reponse_part.status().is_success() {
+                Err(format!("transfert_fichier.upload_split Echec upload fichier split {} : http status {}", fuuid, reponse_part.status().as_u16()))?;
             }
 
-        }
-
-        if buf_bytes.len() > 0 {
-            debug!("upload_split Emttre derniere partie du fichier len: {:?}", buf_bytes.len());
-            self.upload_part(gestionnaire, fuuid, url, position, buf_bytes).await?;
+            debug!("upload_split Reponse put : {}", status_code);
+            {
+                if stream_state_rc.lock().expect("lock").is_none() {
+                    debug!("upload_split Upload termine");
+                    break;
+                }
+            }
         }
 
         let reponse_finale = upload_post_final(gestionnaire, url, fuuid).await?;
@@ -268,12 +257,6 @@ impl UploadHandler {
             true => Ok(reponse_finale.status().as_u16()),
             false => Err(format!("transfert_fichier.upload_split Erreur POST upload fichier {}", reponse_finale.status().as_u16()))?
         }
-    }
-
-    async fn upload_part(&self, gestionnaire: &GestionnairePostmaster, fuuid: &str, url: &str, position: usize, buffer: Vec<u8>) -> Result<Response, Box<dyn Error>> {
-        let body_stream = reqwest::Body::from(buffer);
-        let reponse = connecter_remote(gestionnaire, url, fuuid, Some(position), body_stream).await?;
-        Ok(reponse)
     }
 
 }
@@ -297,10 +280,47 @@ pub struct StreamState {
     pub position: usize,
 }
 
+// https://stackoverflow.com/questions/58700741/is-there-any-way-to-create-a-async-stream-generator-that-yields-the-result-of-re
+fn read_to_substream(stream_state_rc: Arc<Mutex<Option<StreamState>>>) -> impl futures::TryStream<Ok = bytes::Bytes, Error = String> {
+
+    let compteur = 0;
+    // Extraire une version owned the stream_state, va etre passe dans le state
+    let inner_stream_state = stream_state_rc.lock().expect("lock").take().expect("take");
+
+    futures::stream::unfold((inner_stream_state, stream_state_rc, compteur), |state| async move {
+        let (mut inner_stream_state, stream_state_rc, compteur)  = state;
+        let chunk = match inner_stream_state.reponse.chunk().await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("read_to_substream erreur {:?}", e);
+                return None
+            }
+        };
+
+        match chunk {
+            Some(b) => {
+                let compteur = compteur + b.len();
+                inner_stream_state.position += b.len();
+
+                if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
+                    Some((Ok(b), (inner_stream_state, stream_state_rc, compteur)))
+                } else {
+                    // Remettre reponse dans le mutex pour prochaine batch
+                    debug!("read_to_substream Part complet lu : {} bytes", compteur);
+                    let mut guard = stream_state_rc.lock().expect("lock");
+                    *guard = Some(inner_stream_state);
+                    None
+                }
+            },
+            None => None
+        }
+    })
+
+}
+
 #[cfg(test)]
 mod reqwest_stream_tests {
     use std::error::Error;
-    use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use millegrilles_common_rust::configuration::{charger_configuration, ConfigMessages};
     use millegrilles_common_rust::futures::future;
@@ -373,133 +393,4 @@ mod reqwest_stream_tests {
 
     }
 
-    // https://stackoverflow.com/questions/58700741/is-there-any-way-to-create-a-async-stream-generator-that-yields-the-result-of-re
-    fn read_to_substream(stream_state_rc: Arc<Mutex<Option<StreamState>>>) -> impl futures::TryStream<Ok = bytes::Bytes, Error = String> {
-
-        let compteur = 0;
-        // Extraire une version owned the stream_state, va etre passe dans le state
-        let inner_stream_state = stream_state_rc.lock().expect("lock").take().expect("take");
-
-        futures::stream::unfold((inner_stream_state, stream_state_rc, compteur), |state| async move {
-            let (mut inner_stream_state, stream_state_rc, compteur)  = state;
-            let chunk = match inner_stream_state.reponse.chunk().await {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("read_to_substream erreur {:?}", e);
-                    return None
-                }
-            };
-
-            match chunk {
-                Some(b) => {
-                    //debug!("read_to_substream Bytes lues : {}", b.len());
-                    let compteur = compteur + b.len();
-                    inner_stream_state.position += b.len();
-
-                    if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
-                        Some((Ok(b), (inner_stream_state, stream_state_rc, compteur)))
-                    } else {
-                        // Remettre reponse dans le mutex pour prochaine batch
-                        debug!("read_to_substream Part complet lu : {} bytes", compteur);
-                        let mut guard = stream_state_rc.lock().expect("lock");
-                        *guard = Some(inner_stream_state);
-                        None
-                    }
-                },
-                None => None
-            }
-        })
-
-    }
-
-    // fn read_to_substream<'a>(response: &'a mut Response) -> impl futures::Stream<Item = bytes::Bytes> + 'a {
-    //     let position = 0;
-    //     futures::stream::unfold((position, response), |state| async move {
-    //         let (position, response) = state;
-    //         let chunk = match response.chunk().await {
-    //             Ok(c) => c,
-    //             Err(e) => {
-    //                 error!("read_to_substream erreur {:?}", e);
-    //                 return None
-    //             }
-    //         };
-    //         match chunk {
-    //             Some(b) => {
-    //                 debug!("read_to_substream Bytes lues : {}", b.len());
-    //                 let compteur = position + b.len();
-    //                 if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
-    //                     debug!("read_to_substream Part complet lu : {} bytes", compteur);
-    //                     Some((b, (compteur, response)))
-    //                 } else {
-    //                     None
-    //                 }
-    //             },
-    //             None => None
-    //         }
-    //     })
-    //
-    // }
-
-    // async fn read_to_substream(response: &mut Response) -> Result<bool, String> {
-    //     let mut complete = false;
-    //     let mut compteur = 0;
-    //     loop {
-    //         let chunk = match response.chunk().await {
-    //             Ok(c) => c,
-    //             Err(e) => Err(format!("read_to_substream erreur {:?}", e))?
-    //         };
-    //         match chunk {
-    //             Some(b) => {
-    //                 debug!("read_to_substream Bytes lues : {}", b.len());
-    //                 compteur += b.len();
-    //                 if compteur > MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
-    //                     debug!("read_to_substream Part complet lu : {} bytes", compteur);
-    //                     return Ok(true)
-    //                 }
-    //             },
-    //             None => return Ok(false)  // Termine
-    //         }
-    //     }
-    // }
 }
-
-// Essai 1
-        // let mut position = 0;
-        // let mut complete = false;
-        // let stream_reponse = reponse.bytes_stream();
-        // //while ! complete {
-        //     debug!("Position upload : {}", position);
-        //     // let compteur_courant = Mutex::new(0);
-        //     let compteur_courant_rc = Arc::new(Mutex::new(0));
-        //
-        //     let compteur_courant = compteur_courant_rc.clone();
-        //     let take_while = stream_reponse.take(MESSAGE_SIZE_LIMIT);
-        //     // let take_while = stream_reponse.take_while(move |b| {
-        //     //     match b {
-        //     //         Ok(result) => {
-        //     //             let mut guard = compteur_courant.lock().expect("lock");
-        //     //             *guard += result.len();
-        //     //             *guard < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize
-        //     //         },
-        //     //         Err(e) => {
-        //     //             error!("connecter_reqwest Erreur stream : {:?}", e);
-        //     //             false
-        //     //         }
-        //     //     }
-        //     // });
-        //     let body = reqwest::Body::wrap_stream(take_while);
-        //     let url_put = Url::parse(format!("http://mg-dev1.maple.maceroc.com:3033/fichiers/test1/{}", position).as_str())
-        //         .expect("url");
-        //     let reponse_put = client_remote.put(url_put)
-        //         .header("Content-Type", "application/stream")
-        //         .body(body)
-        //         .send().await.expect("put");
-        //
-        //     {
-        //         // Ajuster position
-        //         let guard = compteur_courant_rc.lock().expect("lock");
-        //         position += *guard;
-        //         complete = *guard == 0;  // Marqueur complete
-        //     }
-        //     debug!("Reponse serveur put code : {}, headers: {:?}", reponse_put.status(), reponse_put.headers());
-        // //}
