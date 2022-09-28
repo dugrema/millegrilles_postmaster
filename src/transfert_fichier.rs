@@ -31,7 +31,7 @@ use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
 
 const BUFFER_SIZE: u32 = 32*1024;
-const MESSAGE_SIZE_LIMIT: usize = 1 * 1024 * 1024;
+const MESSAGE_SIZE_LIMIT: usize = 5 * 1024 * 1024;
 
 pub async fn uploader_attachment<M>(
     middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
@@ -292,6 +292,11 @@ async fn upload_post_final(gestionnaire: &GestionnairePostmaster, url: &str, fuu
     Ok(response)
 }
 
+pub struct StreamState {
+    pub reponse: Response,
+    pub position: usize,
+}
+
 #[cfg(test)]
 mod reqwest_stream_tests {
     use std::error::Error;
@@ -341,11 +346,15 @@ mod reqwest_stream_tests {
 
         let client_remote = new_client_remote().expect("client");
 
-        let mut position = 0;
-        let response_rc = Arc::new(Mutex::new(Some(reponse)));
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse, position: 0})));
 
         loop  {
-            let iter = read_to_substream(response_rc.clone());
+            let position = {
+                // Extraire position courante
+                let guard = stream_state_rc.lock().expect("lock");
+                guard.as_ref().expect("stream state").position
+            };
+            let iter = read_to_substream(stream_state_rc.clone());
             let body = Body::wrap_stream(iter);
             let url_put = Url::parse(format!("http://mg-dev1.maple.maceroc.com:3033/fichiers/test1/{}", position).as_str())
                 .expect("url");
@@ -355,7 +364,7 @@ mod reqwest_stream_tests {
                 .send().await.expect("put");
             debug!("Reponse put : {:?}", reponse_put);
             {
-                if response_rc.lock().expect("lock").is_none() {
+                if stream_state_rc.lock().expect("lock").is_none() {
                     debug!("Upload termine");
                     break;
                 }
@@ -365,15 +374,15 @@ mod reqwest_stream_tests {
     }
 
     // https://stackoverflow.com/questions/58700741/is-there-any-way-to-create-a-async-stream-generator-that-yields-the-result-of-re
-    fn read_to_substream(response: Arc<Mutex<Option<Response>>>) -> impl futures::TryStream<Ok = bytes::Bytes, Error = String> {
-        let position = 0;
+    fn read_to_substream(stream_state_rc: Arc<Mutex<Option<StreamState>>>) -> impl futures::TryStream<Ok = bytes::Bytes, Error = String> {
 
-        let response_ref = response.lock().expect("lock").take().expect("take");
+        let compteur = 0;
+        // Extraire une version owned the stream_state, va etre passe dans le state
+        let inner_stream_state = stream_state_rc.lock().expect("lock").take().expect("take");
 
-        futures::stream::unfold((position, response, response_ref), |state| async move {
-            let (position, response, mut response_ref) = state;
-
-            let chunk = match response_ref.chunk().await {
+        futures::stream::unfold((inner_stream_state, stream_state_rc, compteur), |state| async move {
+            let (mut inner_stream_state, stream_state_rc, compteur)  = state;
+            let chunk = match inner_stream_state.reponse.chunk().await {
                 Ok(c) => c,
                 Err(e) => {
                     error!("read_to_substream erreur {:?}", e);
@@ -384,14 +393,16 @@ mod reqwest_stream_tests {
             match chunk {
                 Some(b) => {
                     //debug!("read_to_substream Bytes lues : {}", b.len());
-                    let compteur = position + b.len();
+                    let compteur = compteur + b.len();
+                    inner_stream_state.position += b.len();
+
                     if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
-                        Some((Ok(b), (compteur, response, response_ref)))
+                        Some((Ok(b), (inner_stream_state, stream_state_rc, compteur)))
                     } else {
                         // Remettre reponse dans le mutex pour prochaine batch
                         debug!("read_to_substream Part complet lu : {} bytes", compteur);
-                        let mut guard = response.lock().expect("lock");
-                        *guard = Some(response_ref);
+                        let mut guard = stream_state_rc.lock().expect("lock");
+                        *guard = Some(inner_stream_state);
                         None
                     }
                 },
