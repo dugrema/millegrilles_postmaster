@@ -19,15 +19,18 @@ use millegrilles_common_rust::hachages::Hacheur;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::reqwest::{Body, Request, Response, Url};
+
 use millegrilles_common_rust::tokio_util::io::StreamReader;
 // for map_err
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
+use millegrilles_common_rust::futures;
+use millegrilles_common_rust::bytes;
 
 use crate::constantes::*;
 use crate::gestionnaire::{GestionnairePostmaster, new_client_local};
 use crate::messages_struct::*;
 
-const BUFFER_SIZE: u32 = 131072;
+const BUFFER_SIZE: u32 = 32*1024;
 const MESSAGE_SIZE_LIMIT: usize = 1 * 1024 * 1024;
 
 pub async fn uploader_attachment<M>(
@@ -288,3 +291,204 @@ async fn upload_post_final(gestionnaire: &GestionnairePostmaster, url: &str, fuu
 
     Ok(response)
 }
+
+#[cfg(test)]
+mod reqwest_stream_tests {
+    use std::error::Error;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+    use millegrilles_common_rust::configuration::{charger_configuration, ConfigMessages};
+    use millegrilles_common_rust::futures::future;
+    use millegrilles_common_rust::futures::stream::{FuturesUnordered, SplitSink};
+    use millegrilles_common_rust::futures_util::stream::SplitStream;
+    use millegrilles_common_rust::reqwest::Client;
+    use millegrilles_common_rust::{tokio, tokio_stream};
+    use millegrilles_common_rust::tokio_stream::StreamExt;
+
+    use crate::test_setup::setup;
+    use crate::tokio::spawn;
+
+    use super::*;
+
+    pub fn new_client_remote() -> Result<Client, Box<dyn Error>> {
+        let client = reqwest::Client::builder()
+            // .https_only(true)
+            .use_rustls_tls()
+            .http2_adaptive_window(true)
+            .danger_accept_invalid_certs(true)  // Millegrille tierce
+            .build()?;
+        Ok(client)
+    }
+
+    #[tokio::test]
+    async fn connecter_reqwest<'a>() {
+        setup("connecter");
+        debug!("Connecter");
+
+        let config = charger_configuration().expect("config");
+        let enveloppe_privee = config.get_configuration_pki().get_enveloppe_privee();
+
+        let client_local = new_client_local(&enveloppe_privee).expect("client");
+
+        // Get un fichier de 1MB+
+        // zSEfXUALWJjpWkLE73sB1cXyi1z3LabiTqDabW8BewscyZyFRcR1ph7grrGnVfPVmt8LTTSPU8wgiNJ2vLKWrzdVPBsRDQ
+        // zSEfXUETz8HgPfPvy9RkyeaJA3QASHTnEzawNyPPBS55G11GA6AhJAkPmWqk4AJdr9cqMh7g9rtBHgooSPyDEFmhbYypPf
+        let url_request = Url::parse("https://mg-dev1.maple.maceroc.com:444/fichiers_transfert/zSEfXUETz8HgPfPvy9RkyeaJA3QASHTnEzawNyPPBS55G11GA6AhJAkPmWqk4AJdr9cqMh7g9rtBHgooSPyDEFmhbYypPf")
+            .expect("url");
+        let request = client_local.get(url_request);
+        let mut reponse = request.send().await.expect("reponse");
+        debug!("Reponse serveur request code : {}, headers: {:?}", reponse.status(), reponse.headers());
+
+        let client_remote = new_client_remote().expect("client");
+
+        let mut position = 0;
+        let response_rc = Arc::new(Mutex::new(Some(reponse)));
+
+        loop  {
+            let iter = read_to_substream(response_rc.clone());
+            let body = Body::wrap_stream(iter);
+            let url_put = Url::parse(format!("http://mg-dev1.maple.maceroc.com:3033/fichiers/test1/{}", position).as_str())
+                .expect("url");
+            let reponse_put = client_remote.put(url_put)
+                .header("Content-Type", "application/stream")
+                .body(body)
+                .send().await.expect("put");
+            debug!("Reponse put : {:?}", reponse_put);
+            {
+                if response_rc.lock().expect("lock").is_none() {
+                    debug!("Upload termine");
+                    break;
+                }
+            }
+        }
+
+    }
+
+    // https://stackoverflow.com/questions/58700741/is-there-any-way-to-create-a-async-stream-generator-that-yields-the-result-of-re
+    fn read_to_substream(response: Arc<Mutex<Option<Response>>>) -> impl futures::TryStream<Ok = bytes::Bytes, Error = String> {
+        let position = 0;
+
+        let response_ref = response.lock().expect("lock").take().expect("take");
+
+        futures::stream::unfold((position, response, response_ref), |state| async move {
+            let (position, response, mut response_ref) = state;
+
+            let chunk = match response_ref.chunk().await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("read_to_substream erreur {:?}", e);
+                    return None
+                }
+            };
+
+            match chunk {
+                Some(b) => {
+                    //debug!("read_to_substream Bytes lues : {}", b.len());
+                    let compteur = position + b.len();
+                    if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
+                        Some((Ok(b), (compteur, response, response_ref)))
+                    } else {
+                        // Remettre reponse dans le mutex pour prochaine batch
+                        debug!("read_to_substream Part complet lu : {} bytes", compteur);
+                        let mut guard = response.lock().expect("lock");
+                        *guard = Some(response_ref);
+                        None
+                    }
+                },
+                None => None
+            }
+        })
+
+    }
+
+    // fn read_to_substream<'a>(response: &'a mut Response) -> impl futures::Stream<Item = bytes::Bytes> + 'a {
+    //     let position = 0;
+    //     futures::stream::unfold((position, response), |state| async move {
+    //         let (position, response) = state;
+    //         let chunk = match response.chunk().await {
+    //             Ok(c) => c,
+    //             Err(e) => {
+    //                 error!("read_to_substream erreur {:?}", e);
+    //                 return None
+    //             }
+    //         };
+    //         match chunk {
+    //             Some(b) => {
+    //                 debug!("read_to_substream Bytes lues : {}", b.len());
+    //                 let compteur = position + b.len();
+    //                 if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
+    //                     debug!("read_to_substream Part complet lu : {} bytes", compteur);
+    //                     Some((b, (compteur, response)))
+    //                 } else {
+    //                     None
+    //                 }
+    //             },
+    //             None => None
+    //         }
+    //     })
+    //
+    // }
+
+    // async fn read_to_substream(response: &mut Response) -> Result<bool, String> {
+    //     let mut complete = false;
+    //     let mut compteur = 0;
+    //     loop {
+    //         let chunk = match response.chunk().await {
+    //             Ok(c) => c,
+    //             Err(e) => Err(format!("read_to_substream erreur {:?}", e))?
+    //         };
+    //         match chunk {
+    //             Some(b) => {
+    //                 debug!("read_to_substream Bytes lues : {}", b.len());
+    //                 compteur += b.len();
+    //                 if compteur > MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
+    //                     debug!("read_to_substream Part complet lu : {} bytes", compteur);
+    //                     return Ok(true)
+    //                 }
+    //             },
+    //             None => return Ok(false)  // Termine
+    //         }
+    //     }
+    // }
+}
+
+// Essai 1
+        // let mut position = 0;
+        // let mut complete = false;
+        // let stream_reponse = reponse.bytes_stream();
+        // //while ! complete {
+        //     debug!("Position upload : {}", position);
+        //     // let compteur_courant = Mutex::new(0);
+        //     let compteur_courant_rc = Arc::new(Mutex::new(0));
+        //
+        //     let compteur_courant = compteur_courant_rc.clone();
+        //     let take_while = stream_reponse.take(MESSAGE_SIZE_LIMIT);
+        //     // let take_while = stream_reponse.take_while(move |b| {
+        //     //     match b {
+        //     //         Ok(result) => {
+        //     //             let mut guard = compteur_courant.lock().expect("lock");
+        //     //             *guard += result.len();
+        //     //             *guard < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize
+        //     //         },
+        //     //         Err(e) => {
+        //     //             error!("connecter_reqwest Erreur stream : {:?}", e);
+        //     //             false
+        //     //         }
+        //     //     }
+        //     // });
+        //     let body = reqwest::Body::wrap_stream(take_while);
+        //     let url_put = Url::parse(format!("http://mg-dev1.maple.maceroc.com:3033/fichiers/test1/{}", position).as_str())
+        //         .expect("url");
+        //     let reponse_put = client_remote.put(url_put)
+        //         .header("Content-Type", "application/stream")
+        //         .body(body)
+        //         .send().await.expect("put");
+        //
+        //     {
+        //         // Ajuster position
+        //         let guard = compteur_courant_rc.lock().expect("lock");
+        //         position += *guard;
+        //         complete = *guard == 0;  // Marqueur complete
+        //     }
+        //     debug!("Reponse serveur put code : {}, headers: {:?}", reponse_put.status(), reponse_put.headers());
+        // //}
