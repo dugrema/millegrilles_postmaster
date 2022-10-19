@@ -195,7 +195,7 @@ impl UploadHandler {
     }
 
     async fn upload_simple(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
-        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0})));
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0, chunk_overlap: None})));
         let iter = read_to_substream(stream_state_rc.clone());
         let body_stream = Body::wrap_stream(iter);
 
@@ -210,7 +210,7 @@ impl UploadHandler {
 
     async fn upload_split(&self, gestionnaire: &GestionnairePostmaster, response_local: Response, fuuid: &str, url: &str) -> Result<u16, Box<dyn Error>> {
 
-        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0})));
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse: response_local, position: 0, chunk_overlap: None})));
         loop  {
             let position_courante = {
                 // Extraire position courante
@@ -226,6 +226,7 @@ impl UploadHandler {
 
             let status_code = reponse_part.status().as_u16();
             if status_code == 200 {
+                debug!("Reponse part {:?}", reponse_part);
                 match reponse_part.json::<ResponsePutFichierPartiel>().await {
                     Ok(r) => {
                         if r.ok {
@@ -278,6 +279,7 @@ async fn upload_post_final(gestionnaire: &GestionnairePostmaster, url: &str, fuu
 pub struct StreamState {
     pub reponse: Response,
     pub position: usize,
+    pub chunk_overlap: Option<bytes::Bytes>,
 }
 
 // https://stackoverflow.com/questions/58700741/is-there-any-way-to-create-a-async-stream-generator-that-yields-the-result-of-re
@@ -289,24 +291,38 @@ fn read_to_substream(stream_state_rc: Arc<Mutex<Option<StreamState>>>) -> impl f
 
     futures::stream::unfold((inner_stream_state, stream_state_rc, compteur), |state| async move {
         let (mut inner_stream_state, stream_state_rc, compteur)  = state;
-        let chunk = match inner_stream_state.reponse.chunk().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("read_to_substream erreur {:?}", e);
-                return None
+
+        // Prendre prochain chunk - utiliser overlap si disponible, sinon stream
+        let chunk = match inner_stream_state.chunk_overlap.take() {
+            Some(b) => {
+                // debug!("read_to_substream Take overlap len {}", b.len());
+                Some(b)
+            },
+            None => match inner_stream_state.reponse.chunk().await {
+                Ok(c) => {
+                    // if let Some(b) = c.as_ref() {
+                    //     debug!("read_to_substream Read stream input {}", b.len());
+                    // }
+                    c
+                },
+                Err(e) => {
+                    error!("read_to_substream erreur {:?}", e);
+                    return None
+                }
             }
         };
 
         match chunk {
             Some(b) => {
-                let compteur = compteur + b.len();
-                inner_stream_state.position += b.len();
+                let compteur_chunk = compteur + b.len();
 
-                if compteur < MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
-                    Some((Ok(b), (inner_stream_state, stream_state_rc, compteur)))
+                if compteur_chunk <= MESSAGE_SIZE_LIMIT - BUFFER_SIZE as usize {
+                    inner_stream_state.position += b.len();
+                    Some((Ok(b), (inner_stream_state, stream_state_rc, compteur_chunk)))
                 } else {
                     // Remettre reponse dans le mutex pour prochaine batch
-                    debug!("read_to_substream Part complet lu : {} bytes", compteur);
+                    debug!("read_to_substream Part complet lu : {} bytes, overlap {}", compteur, b.len());
+                    inner_stream_state.chunk_overlap = Some(b);
                     let mut guard = stream_state_rc.lock().expect("lock");
                     *guard = Some(inner_stream_state);
                     None
@@ -366,7 +382,7 @@ mod reqwest_stream_tests {
 
         let client_remote = new_client_remote().expect("client");
 
-        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse, position: 0})));
+        let stream_state_rc = Arc::new(Mutex::new(Some(StreamState {reponse, position: 0, chunk_overlap: None})));
 
         loop  {
             let position = {
