@@ -109,13 +109,15 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
             let message_http = json!({
                 "message": &message_map,
                 "chiffrage": {
-                    "cles": &destination.cles,
+                    "hachage_bytes": &cle_info.hachage_bytes,
                     "domaine": "Messagerie",
                     "format": &cle_info.format,
-                    "hachage_bytes": &cle_info.hachage_bytes,
+                    "signature_identite": &cle_info.signature_identite,
+                    "cles": &destination.cles,
                     "identificateurs_document": {
                         "message": "true"
                     },
+                    "header": &cle_info.header,
                     "iv": &cle_info.iv,
                     "tag": &cle_info.tag,
                 },
