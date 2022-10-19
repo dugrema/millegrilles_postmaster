@@ -58,7 +58,7 @@ async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
     let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
-    debug!("commande_poster Traiter message poster recu : {:?}", uuid_transaction);
+    debug!("commande_poster Traiter message poster recu : {} : {:?}", uuid_transaction, m);
     let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu(None)?;
     debug!("commande_poster Message mappe : {:?}", message_poster);
 
