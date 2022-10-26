@@ -12,6 +12,7 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::MessageValideAction;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::EnveloppePrivee;
+use millegrilles_common_rust::configuration::ConfigurationNoeud;
 use millegrilles_common_rust::reqwest;
 use millegrilles_common_rust::reqwest::Client;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
@@ -26,6 +27,7 @@ pub struct GestionnairePostmaster {
     // tx_pompe_messages: Mutex<Option<Sender<MessagePompe>>>,
     pub http_client_local: Option<Client>,
     pub http_client_remote: Option<Client>,
+    pub http_client_tor: Option<Client>,
 }
 
 #[async_trait]
@@ -89,6 +91,7 @@ impl Clone for GestionnairePostmaster {
         GestionnairePostmaster {
             http_client_local: self.http_client_local.clone(),
             http_client_remote: self.http_client_remote.clone(),
+            http_client_tor: self.http_client_tor.clone(),
         }
     }
 }
@@ -98,6 +101,7 @@ impl GestionnairePostmaster {
         return GestionnairePostmaster {
             http_client_local: None,
             http_client_remote: None,
+            http_client_tor: None,
         }
     }
 
@@ -185,4 +189,35 @@ pub fn new_client_remote() -> Result<Client, Box<dyn Error>> {
         .danger_accept_invalid_certs(true)  // Millegrille tierce
         .build()?;
     Ok(client)
+}
+
+pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
+
+    let url_proxy = match &configuration.tor_proxy {
+        Some(inner) => inner,
+        None => return None
+    };
+
+    let proxy = match reqwest::Proxy::https(url_proxy.clone()) {
+        Ok(inner) => inner,
+        Err(e) => {
+            warn!("Erreur adresse proxy TOR ({}), tor ne sera pas disponible : {:?}", url_proxy, e);
+            return None
+        }
+    };
+
+    let builder = reqwest::Client::builder().https_only(true)
+        .use_rustls_tls()
+        .http2_adaptive_window(true)
+        .danger_accept_invalid_certs(true)  // Millegrille tierce
+        .proxy(proxy);
+
+    match builder.build() {
+        Ok(inner) => Some(inner),
+        Err(e) => {
+            warn!("Erreur creation proxy TOR (.onion), tor ne sera pas disponible : {:?}", e);
+            None
+        }
+    }
+
 }

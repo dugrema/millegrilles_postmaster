@@ -83,20 +83,33 @@ async fn build() -> FuturesUnordered<JoinHandle<()>> {
 
     let middleware_hooks = preparer_middleware_message();
     let middleware = middleware_hooks.middleware;
+    let configuration = middleware.get_configuration_noeud();
 
     // Wiring final du gestionnaire
-    let gestionnaire_static = match new_client_local(middleware.get_enveloppe_privee().as_ref()) {
-        Ok(client_local) => {
-            gestionnaire_mut.http_client_local = Some(client_local);
-            match new_client_remote() {
-                Ok(client_remote) => {
-                    gestionnaire_mut.http_client_remote = Some(client_remote);
-                    charger_gestionnaire(gestionnaire_mut)
-                },
-                Err(e) => panic!("Erreur creation client reqwest pour fichiers remote : {:?}", e)
-            }
-        },
-        Err(e) => panic!("Erreur creation client reqwest pour fichiers locaux : {:?}", e)
+    let gestionnaire_static = {
+
+        // Creer client https local
+        match new_client_local(middleware.get_enveloppe_privee().as_ref()) {
+            Ok(inner) => {
+                gestionnaire_mut.http_client_local = Some(inner);
+            },
+            Err(e) => panic!("Erreur creation client reqwest pour fichiers locaux : {:?}", e)
+        };
+
+        // Creer client https remote
+        match new_client_remote() {
+            Ok(inner) => {
+                gestionnaire_mut.http_client_remote = Some(inner);
+            },
+            Err(e) => panic!("Erreur creation client reqwest pour fichiers remote : {:?}", e)
+        }
+
+        // Creer client avec proxy TOR
+        if let Some(inner) = new_client_tor(configuration) {
+            gestionnaire_mut.http_client_tor = Some(inner);
+        }
+
+        charger_gestionnaire(gestionnaire_mut)
     };
 
     // Preparer les green threads de tous les domaines/processus
