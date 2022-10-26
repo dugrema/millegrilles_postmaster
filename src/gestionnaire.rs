@@ -176,6 +176,7 @@ pub fn new_client_local(enveloppe_privee: &EnveloppePrivee) -> Result<Client, Bo
         .use_rustls_tls()
         // .http1_only()
         .http2_adaptive_window(true)
+        .connect_timeout(Duration::new(30, 0))
         .build()?;
 
     Ok(client)
@@ -187,6 +188,7 @@ pub fn new_client_remote() -> Result<Client, Box<dyn Error>> {
         .use_rustls_tls()
         .http2_adaptive_window(true)
         .danger_accept_invalid_certs(true)  // Millegrille tierce
+        .connect_timeout(Duration::new(30, 0))
         .build()?;
     Ok(client)
 }
@@ -197,6 +199,8 @@ pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
         Some(inner) => inner,
         None => return None
     };
+
+    info!("new_client_tor TOR proxy url {}", url_proxy.as_str());
 
     let proxy = match reqwest::Proxy::all(url_proxy.clone()) {
         Ok(inner) => inner,
@@ -210,6 +214,7 @@ pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
         .use_rustls_tls()
         .http2_adaptive_window(true)
         .danger_accept_invalid_certs(true)  // Millegrille tierce
+        .connect_timeout(Duration::new(90, 0))
         .proxy(proxy);
 
     match builder.build() {
