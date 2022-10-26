@@ -13,6 +13,7 @@ use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::verificateur::VerificateurMessage;
 use millegrilles_common_rust::reqwest;
+use millegrilles_common_rust::reqwest::{Client, Url};
 
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
@@ -62,12 +63,12 @@ async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire
     let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu(None)?;
     debug!("commande_poster Message mappe : {:?}", message_poster);
 
-    poster_message(middleware, message_poster).await?;
+    poster_message(middleware, message_poster, gestionnaire).await?;
 
     Ok(None)
 }
 
-async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPoster)
+async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPoster, gestionnaire: &GestionnairePostmaster)
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
@@ -91,14 +92,14 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         None => Err(format!("commandes.poster_message Entete manquante du message"))
     }?;
 
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
-    headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .connect_timeout(Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
-        .build()?;
+    // let mut headers = reqwest::header::HeaderMap::new();
+    // headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+    // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+    // let client = reqwest::Client::builder()
+    //     .default_headers(headers)
+    //     .connect_timeout(Duration::from_secs(10))
+    //     .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
+    //     .build()?;
 
     debug!("commandes.poster_message Emettre message vers destinations {:?}", message_poster.destinations);
 
@@ -136,30 +137,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         };
 
         // Emettre message via HTTP POST
-        // Boucler dans la liste des destinations pour la millegrille tierce
-        let mut status_reponse = None;
-        for app_config in &destination.fiche.application {
-            let url_app = app_config.url.as_str();
-            let url_poster = format!("{}/poster", url_app);
-            info!("Poster message vers {}", url_poster);
-            let res = client.post(url_poster.clone())
-                .body(message_bytes.clone())
-                .send()
-                .await?;
-            debug!("Reponse post HTTP : {:?}", res);
-            if res.status().is_success() {
-                info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
-                status_reponse = Some(res.status());
-                break;  // On a reussi le transfert, pas besoin de poursuivre
-            } else {
-                warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
-            }
-        }
-
-        let code_reponse = match status_reponse {
-            Some(r) => r.as_u16(),
-            None => 503
-        };
+        let code_reponse = transmettre_message(&gestionnaire, &destination, message_bytes).await?;
 
         let mut confirmations = Vec::new();
         let idmg = destination.idmg;
@@ -185,6 +163,108 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
     }
 
     Ok(())
+}
+
+async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {
+    let mut status_reponse = None;
+
+    // Mettre les destinations en ordre (TOR en premier si disponible)
+    let tor_disponible = gestionnaire.http_client_tor.is_some();
+    let mut destinations = Vec::new();
+    for app_config in &destination.fiche.application {
+        let url = match Url::parse(app_config.url.as_str()) {
+            Ok(inner) => inner,
+            Err(e) => {
+                info!("transmettre_message Erreur parse url destination {} : {:?}", app_config.url, e);
+                continue;
+            }
+        };
+        if let Some(domaine) = url.domain() {
+            if domaine.ends_with(".onion") {
+                if tor_disponible {
+                    // Ajouter l'adresse .onion en haut de la liste
+                    destinations.insert(0, app_config);
+                }
+            } else {
+                // Ce n'est pas une adresse TOR, ajouter a la fin de la liste
+                destinations.push(app_config);
+            }
+        }
+    }
+
+    debug!("transmettre_message Liste destinations triees : {:?}", destinations);
+
+    // Boucler dans la liste des destinations pour la millegrille tierce
+    for app_config in destinations {
+        let url_app_str = format!("{}/poster", app_config.url.as_str());
+        let url_poster = match Url::parse(url_app_str.as_str()) {
+            Ok(inner) => inner,
+            Err(e) => {
+                info!("transmettre_message Erreur parse URL {} : {:?}", url_app_str, e);
+                continue;  // Skip
+            }
+        };
+
+        info!("transmettre_message Poster message vers {:?}", url_poster);
+        let client = match url_poster.domain() {
+            Some(domaine) => {
+                if domaine.ends_with(".onion") {
+                    match &gestionnaire.http_client_tor {
+                        Some(inner) => inner,
+                        None => {
+                            // Tor n'est pas disponible, on skip cette adresse
+                            continue;
+                        }
+                    }
+                } else {
+                    match &gestionnaire.http_client_remote {
+                        Some(inner) => inner,
+                        None => {
+                            // Client https non disponible, on skip cette adresse
+                            continue;
+                        }
+                    }
+                }
+            },
+            None => {
+                info!("transmettre_message URL sans domaine, skip");
+                continue;
+            }
+        };
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+        headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+
+        let request_builder = client.post(url_poster.clone())
+            .headers(headers)
+            .body(message_bytes.clone());
+
+        let res = match request_builder.send().await {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("Erreur transmission message via {} : {:?}", url_app_str, e);
+                continue;
+            }
+        };
+
+        debug!("Reponse post HTTP : {:?}", res);
+        if res.status().is_success() {
+            info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
+            status_reponse = Some(res.status());
+            break;  // On a reussi le transfert, pas besoin de poursuivre
+        } else {
+            warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
+        }
+    }
+
+    // Return code reponse
+    let code_reponse = match status_reponse {
+        Some(r) => r.as_u16(),
+        None => 503
+    };
+
+    Ok(code_reponse)
 }
 
 async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)

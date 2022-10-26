@@ -198,7 +198,7 @@ pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
         None => return None
     };
 
-    let proxy = match reqwest::Proxy::https(url_proxy.clone()) {
+    let proxy = match reqwest::Proxy::all(url_proxy.clone()) {
         Ok(inner) => inner,
         Err(e) => {
             warn!("Erreur adresse proxy TOR ({}), tor ne sera pas disponible : {:?}", url_proxy, e);
