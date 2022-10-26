@@ -19,7 +19,7 @@ use millegrilles_common_rust::futures_util::sink::Buffer;
 use millegrilles_common_rust::hachages::Hacheur;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multihash::Code;
-use millegrilles_common_rust::reqwest::{Body, Request, Response, Url};
+use millegrilles_common_rust::reqwest::{Body, Client, Request, Response, Url};
 
 use millegrilles_common_rust::tokio_util::io::StreamReader;
 // for map_err
@@ -98,12 +98,17 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
     -> Result<u16, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + IsConfigNoeud
 {
-    for app in &fiche.application {
+    let destinations = trier_destinations(gestionnaire, fiche);
+
+    debug!("transferer_fichier Destinations triees : {:?}", destinations);
+
+    for app in destinations {
         let url = app.url.as_str();
 
         // Ouvrir reader aupres de la millegrille locale
         let response_local = connecter_local(middleware, gestionnaire, fuuid).await?;
-        debug!("Reponse local : {:?}", response_local);
+        debug!("transferer_fichier Reponse local : {:?}", response_local);
+
         let taille_fichier = match response_local.headers().get("content-length") {
             Some(cl) => {
                 debug!("Content-Length : {:?}", cl);
@@ -119,11 +124,19 @@ async fn transferer_fichier<M>(middleware: &M, gestionnaire: &GestionnairePostma
             },
             None => None
         };
-        debug!("Traitement fichier taille : {:?}", taille_fichier);
-        let mut handler = UploadHandler { taille: taille_fichier };
-        let status_code = handler.upload(gestionnaire, response_local, fuuid, url).await?;
 
-        return Ok(status_code)
+        debug!("transferer_fichier Traitement fichier taille : {:?} vers {}", taille_fichier, url);
+        let mut handler = UploadHandler { taille: taille_fichier };
+        match handler.upload(gestionnaire, response_local, fuuid, url).await {
+            Ok(status_code) => {
+                // Complete
+                debug!("transferer_fichier Reponse transfert {} : {}", url, status_code);
+                return Ok(status_code)
+            },
+            Err(e) => {
+                error!("transferer_fichier Erreur transfert vers {} : {:?}", url, e)
+            }
+        }
     }
 
     Err(format!("Erreur transfert fichier, aucun upload succes"))?
@@ -159,7 +172,7 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
 async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str, position: Option<usize>, stream: Body)
     -> Result<Response, Box<dyn Error>>
 {
-    let client = gestionnaire.http_client_remote.as_ref().expect("client reqwest fichiers remote");
+    let client = get_client(gestionnaire, url)?;
 
     let mut url_put_fichier = Url::parse(url)?;
     let url_liste_fichiers_str = match position {
@@ -174,6 +187,28 @@ async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuui
         .send().await?;
 
     Ok(response)
+}
+
+fn get_client<'a>(gestionnaire: &'a GestionnairePostmaster, url: &str) -> Result<&'a Client, Box<dyn Error>> {
+    let url_parsed = Url::parse(url)?;
+    let client = if let Some(domain) = url_parsed.domain() {
+        if domain.ends_with(".onion") {
+            // Adresse TOR
+            match &gestionnaire.http_client_tor {
+                Some(inner) => inner,
+                None => Err(format!("Client TOR non disponible pour adresse {}", url))?
+            }
+        } else {
+            match &gestionnaire.http_client_remote.as_ref() {
+                Some(inner) => inner,
+                None => Err(format!("Client HTTPS remote non disponible pour adresse {}", url))?
+            }
+        }
+    } else {
+        Err(format!("URL domaine manquant : {}", url))?
+    };
+
+    Ok(client)
 }
 
 fn convert_err(err: reqwest::Error) -> std::io::Error {
@@ -265,7 +300,8 @@ impl UploadHandler {
 async fn upload_post_final(gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str)
     -> Result<Response, Box<dyn Error>>
 {
-    let client = gestionnaire.http_client_remote.as_ref().expect("client reqwest fichiers remote");
+    // let client = gestionnaire.http_client_remote.as_ref().expect("client reqwest fichiers remote");
+    let client = get_client(&gestionnaire, url)?;
 
     let mut url_post_fichier = Url::parse(url)?;
     let url_liste_fichiers_str = format!("{}/poster/{}", url_post_fichier.path(), fuuid);
@@ -332,6 +368,33 @@ fn read_to_substream(stream_state_rc: Arc<Mutex<Option<StreamState>>>) -> impl f
         }
     })
 
+}
+
+/// Mettre les destinations en ordre (TOR en premier si disponible)
+pub fn trier_destinations<'a>(gestionnaire: &GestionnairePostmaster, fiche: &'a FicheMillegrilleApplication) -> Vec<&'a FicheApplication> {
+    let tor_disponible = gestionnaire.http_client_tor.is_some();
+    let mut destinations = Vec::new();
+    for app_config in &fiche.application {
+        let url = match Url::parse(app_config.url.as_str()) {
+            Ok(inner) => inner,
+            Err(e) => {
+                info!("transmettre_message Erreur parse url destination {} : {:?}", app_config.url, e);
+                continue;
+            }
+        };
+        if let Some(domaine) = url.domain() {
+            if domaine.ends_with(".onion") {
+                if tor_disponible {
+                    // Ajouter l'adresse .onion en haut de la liste
+                    destinations.insert(0, app_config);
+                }
+            } else {
+                // Ce n'est pas une adresse TOR, ajouter a la fin de la liste
+                destinations.push(app_config);
+            }
+        }
+    }
+    destinations
 }
 
 #[cfg(test)]

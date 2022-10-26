@@ -168,29 +168,7 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
 async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {
     let mut status_reponse = None;
 
-    // Mettre les destinations en ordre (TOR en premier si disponible)
-    let tor_disponible = gestionnaire.http_client_tor.is_some();
-    let mut destinations = Vec::new();
-    for app_config in &destination.fiche.application {
-        let url = match Url::parse(app_config.url.as_str()) {
-            Ok(inner) => inner,
-            Err(e) => {
-                info!("transmettre_message Erreur parse url destination {} : {:?}", app_config.url, e);
-                continue;
-            }
-        };
-        if let Some(domaine) = url.domain() {
-            if domaine.ends_with(".onion") {
-                if tor_disponible {
-                    // Ajouter l'adresse .onion en haut de la liste
-                    destinations.insert(0, app_config);
-                }
-            } else {
-                // Ce n'est pas une adresse TOR, ajouter a la fin de la liste
-                destinations.push(app_config);
-            }
-        }
-    }
+    let destinations = trier_destinations(gestionnaire, destination);
 
     debug!("transmettre_message Liste destinations triees : {:?}", destinations);
 
@@ -265,6 +243,33 @@ async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination:
     };
 
     Ok(code_reponse)
+}
+
+/// Mettre les destinations en ordre (TOR en premier si disponible)
+pub fn trier_destinations<'a>(gestionnaire: &GestionnairePostmaster, destination: &'a IdmgMappingDestinataires) -> Vec<&'a FicheApplication> {
+    let tor_disponible = gestionnaire.http_client_tor.is_some();
+    let mut destinations = Vec::new();
+    for app_config in &destination.fiche.application {
+        let url = match Url::parse(app_config.url.as_str()) {
+            Ok(inner) => inner,
+            Err(e) => {
+                info!("transmettre_message Erreur parse url destination {} : {:?}", app_config.url, e);
+                continue;
+            }
+        };
+        if let Some(domaine) = url.domain() {
+            if domaine.ends_with(".onion") {
+                if tor_disponible {
+                    // Ajouter l'adresse .onion en haut de la liste
+                    destinations.insert(0, app_config);
+                }
+            } else {
+                // Ce n'est pas une adresse TOR, ajouter a la fin de la liste
+                destinations.push(app_config);
+            }
+        }
+    }
+    destinations
 }
 
 async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
