@@ -151,4 +151,5 @@ pub struct ResponsePutFichierPartiel {
     pub ok: bool,
     pub code: Option<u32>,
     pub status: Option<usize>,
+    pub err: Option<String>,
 }

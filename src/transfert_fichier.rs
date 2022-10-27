@@ -181,10 +181,20 @@ async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuui
     };
     url_put_fichier.set_path(url_liste_fichiers_str.as_str());
 
-    let response = client.put(url_put_fichier)
+    let response = client.put(url_put_fichier.clone())
         .header("Content-Type", "application/stream")
         .body(stream)
         .send().await?;
+
+    if ! response.status().is_success() {
+        // Cleanup upload (aucun effet si upload simple)
+        match client.delete(url_put_fichier).send().await {
+            Ok(_) => (),
+            Err(e) => {
+                warn!("Erreur cleanup fichier sur erreur '{}' : {:?}", url_liste_fichiers_str, e);
+            }
+        }
+    }
 
     Ok(response)
 }
@@ -256,26 +266,36 @@ impl UploadHandler {
             let body = Body::wrap_stream(iter);
 
             debug!("upload_split Uploader part position {}", position_courante);
-            // let reponse_part = self.upload_part(gestionnaire, fuuid, url, position_courante, body).await?;
             let reponse_part = connecter_remote(gestionnaire, url, fuuid, Some(position_courante), body).await?;
 
-            let status_code = reponse_part.status().as_u16();
-            if status_code == 200 {
-                debug!("Reponse part {:?}", reponse_part);
+            let status = reponse_part.status();
+            let status_code = status.as_u16();
+            if status.is_success() {
+                debug!("Reponse part (status: {}) {:?}", status_code, reponse_part);
                 match reponse_part.json::<ResponsePutFichierPartiel>().await {
-                    Ok(r) => {
-                        if r.ok {
-                            if let Some(code) = r.code {
-                                if code == 7 {
-                                    // Le fichier existe deja, on retourne la reponse. OK.
-                                    return Ok(200)
-                                }
+                //match reponse_part.text().await {
+                    Ok(inner) => {
+                        debug!("Reponse part : {:?}", inner);
+                    },
+                    Err(e) => error!("upload_split Erreur verification reponse : {:?}", e)
+                }
+            } else if status_code == 409 {
+                match reponse_part.headers().get("x-position") {
+                    Some(position) => {
+                        match position.to_str() {
+                            Ok(position_str) => {
+                                debug!("transfert_fichier.upload_split Resume (http 409), position courante {}", position_str);
+                                todo!("Fix me");
+                            },
+                            Err(e) => {
+                                error!("transfert_fichier.upload_split Erreur parse position str, abort : {:?}", e);
+                                Err(e)?;
                             }
                         }
                     },
-                    Err(e) => error!("upload_split Erreur verification reponse json : {:?}", e)
-                };
-            } else if ! reponse_part.status().is_success() {
+                    None => Err(format!("transfert_fichier.upload_split HTTP 409 sans position"))?
+                }
+            } else {
                 Err(format!("transfert_fichier.upload_split Echec upload fichier split {} : http status {}", fuuid, reponse_part.status().as_u16()))?;
             }
 
@@ -289,8 +309,17 @@ impl UploadHandler {
         }
 
         let reponse_finale = upload_post_final(gestionnaire, url, fuuid).await?;
-        match reponse_finale.status().is_success() {
-            true => Ok(reponse_finale.status().as_u16()),
+        let status_final = reponse_finale.status();
+        match status_final.is_success() {
+            true => {
+                let contenu: ResponsePutFichierPartiel = reponse_finale.json().await?;
+                debug!("Reponse finale contenu (status: {}) : {:?}", status_final.as_u16(), contenu);
+                if contenu.ok {
+                    Ok(status_final.as_u16())
+                } else {
+                    Err(format!("Erreur confirmation fichier, err : {:?}", contenu.err))?
+                }
+            },
             false => Err(format!("transfert_fichier.upload_split Erreur POST upload fichier {}", reponse_finale.status().as_u16()))?
         }
     }
