@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use log::{debug, error, info, warn};
 
@@ -9,12 +9,15 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::MiddlewareMessages;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
-use millegrilles_common_rust::recepteur_messages::MessageValideAction;
+use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::EnveloppePrivee;
+use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::configuration::ConfigurationNoeud;
+use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
 use millegrilles_common_rust::reqwest;
-use millegrilles_common_rust::reqwest::Client;
+use millegrilles_common_rust::reqwest::{Client, Url};
+use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use crate::commandes::consommer_commande;
 
@@ -28,6 +31,7 @@ pub struct GestionnairePostmaster {
     pub http_client_local: Option<Client>,
     pub http_client_remote: Option<Client>,
     pub http_client_tor: Option<Client>,
+    pub url_consignation: Mutex<Url>,
 }
 
 #[async_trait]
@@ -71,8 +75,18 @@ impl GestionnaireMessages for GestionnairePostmaster {
 
     async fn entretien<M>(&self, middleware: Arc<M>) where M: MiddlewareMessages + 'static {
         info!("gestionnaire Debut thread entretien");
+
+        // Chargements initiaux - attendre 5 secondes
+        sleep(Duration::new(5, 0)).await;
+        if let Err(e) = charger_configuration_consignation(self, middleware.as_ref()).await {
+            error!("Erreur chargement configuration consignation : {:?}", e);
+        }
+
         loop {
-            sleep(Duration::new(30, 0)).await;
+            sleep(Duration::new(300, 0)).await;
+            if let Err(e) = charger_configuration_consignation(self, middleware.as_ref()).await {
+                error!("Erreur chargement configuration consignation : {:?}", e);
+            }
         }
         info!("gestionnaire Fin thread entretien");
     }
@@ -88,10 +102,12 @@ impl GestionnaireMessages for GestionnairePostmaster {
 
 impl Clone for GestionnairePostmaster {
     fn clone(&self) -> Self {
+        let url = Mutex::new(self.url_consignation.lock().expect("lock").clone());
         GestionnairePostmaster {
             http_client_local: self.http_client_local.clone(),
             http_client_remote: self.http_client_remote.clone(),
             http_client_tor: self.http_client_tor.clone(),
+            url_consignation: url,
         }
     }
 }
@@ -102,6 +118,7 @@ impl GestionnairePostmaster {
             http_client_local: None,
             http_client_remote: None,
             http_client_tor: None,
+            url_consignation: Mutex::new(Url::parse("https://fichiers:443").expect("url"))
         }
     }
 
@@ -225,4 +242,32 @@ pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
         }
     }
 
+}
+
+
+async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostmaster, middleware: &M)
+                               -> Result<(), Box<dyn Error>>
+    where M: MiddlewareMessages + 'static
+{
+    debug!("charger_configuration_consignation Charger URL de consignation via CoreTopologie");
+
+    let requete = json!({});
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "getConsignationFichiers")
+        .exchanges(vec![Securite::L1Public])
+        .build();
+
+    let reponse = middleware.transmettre_requete(routage, &requete).await?;
+    if let TypeMessage::Valide(reponse) = reponse {
+        debug!("Reponse configuration consignation : {:?}", reponse);
+        let config_info: ReponseInformationConsignationFichiers = reponse.message.parsed.map_contenu(None)?;
+        if let Some(true) = config_info.ok {
+            let consignation_url_str = config_info.consignation_url;
+            debug!("Maj URL consignation : {}", consignation_url_str);
+            let consignation_url = Url::parse(consignation_url_str.as_str())?;
+            let mut guard = gestionnaire.url_consignation.lock().expect("lock");
+            *guard = consignation_url;
+        }
+    }
+
+    Ok(())
 }

@@ -148,14 +148,11 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
 {
     let client_interne = gestionnaire.http_client_local.as_ref().expect("client reqwest fichiers locaux");
 
-    let url_get_fichier = match &middleware.get_configuration_noeud().fichiers_url {
-        Some(u) => {
-            let mut url_get_fichier = u.clone();
-            let url_liste_fichiers_str = format!("/fichiers_transfert/{}", fuuid);
-            url_get_fichier.set_path(url_liste_fichiers_str.as_str());
-            url_get_fichier
-        },
-        None => Err(format!("transfert_fichier.transferer_fichier URL fichiers n'est pas disponible"))?
+    let url_get_fichier = {
+        let url_liste_fichiers_str = format!("/fichiers_transfert/{}", fuuid);
+        let mut url_get_fichier = gestionnaire.url_consignation.lock().expect("lock").clone();
+        url_get_fichier.set_path(url_liste_fichiers_str.as_str());
+        url_get_fichier
     };
 
     debug!("connecter_local Creer pipe vers {:?}", url_get_fichier.as_str());
