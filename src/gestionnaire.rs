@@ -251,6 +251,12 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
 {
     debug!("charger_configuration_consignation Charger URL de consignation via CoreTopologie");
 
+    let subject = middleware.get_enveloppe_privee().subject()?;
+    let instance_id = match subject.get("commonName") {
+        Some(subject) => Some(subject.clone()),
+        None => None
+    };
+
     let requete = json!({});
     let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "getConsignationFichiers")
         .exchanges(vec![Securite::L1Public])
@@ -261,9 +267,16 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
         debug!("Reponse configuration consignation : {:?}", reponse);
         let config_info: ReponseInformationConsignationFichiers = reponse.message.parsed.map_contenu(None)?;
         if let Some(true) = config_info.ok {
-            let consignation_url_str = config_info.consignation_url;
-            debug!("Maj URL consignation : {}", consignation_url_str);
-            let consignation_url = Url::parse(consignation_url_str.as_str())?;
+            let config_instance = config_info.instance_id;
+
+            let consignation_url = if Some(config_instance) == instance_id {
+                Url::parse("https://fichiers:443")
+            } else {
+                let consignation_url_str = config_info.consignation_url;
+                Url::parse(consignation_url_str.as_str())
+            }?;
+            debug!("Maj URL consignation : {:?}", consignation_url);
+
             let mut guard = gestionnaire.url_consignation.lock().expect("lock");
             *guard = consignation_url;
         }
