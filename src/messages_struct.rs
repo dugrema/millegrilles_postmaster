@@ -190,7 +190,7 @@ pub struct ConfigurationSmtp {
     pub port: u16,
     pub replyto: Option<String>,
     pub username: String,
-    pub password: String,
+    pub password: Option<String>,
 }
 
 #[derive(Clone, Debug)]

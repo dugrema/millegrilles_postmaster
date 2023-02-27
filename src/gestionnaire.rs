@@ -15,11 +15,12 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::EnveloppePrivee;
-use millegrilles_common_rust::chiffrage_cle::{InformationCle, ReponseDechiffrageCles};
+use millegrilles_common_rust::chiffrage_cle::{CleDechiffree, InformationCle, ReponseDechiffrageCles};
 use millegrilles_common_rust::common_messages::{DataChiffre, ReponseInformationConsignationFichiers};
 use millegrilles_common_rust::configuration::ConfigurationNoeud;
+use millegrilles_common_rust::dechiffrage::dechiffrer_data;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
-use millegrilles_common_rust::reqwest;
+use millegrilles_common_rust::{reqwest, serde_json};
 use millegrilles_common_rust::reqwest::{Client, Url};
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
@@ -27,7 +28,7 @@ use crate::commandes::consommer_commande;
 
 use crate::constantes::*;
 use crate::evenements::consommer_evenement;
-use crate::messages_struct::{ConfigurationNotifications, ReponseConfigurationNotifications};
+use crate::messages_struct::{ConfigurationNotifications, ConfigurationSmtp, ReponseConfigurationNotifications};
 use crate::requetes::consommer_requete;
 
 #[derive(Debug)]
@@ -301,6 +302,11 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
     Ok(())
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct SmtpDechiffre {
+    smtp_password: Option<String>
+}
+
 async fn charger_configuration_notifications<M>(gestionnaire: &GestionnairePostmaster, middleware: &M)
     -> Result<(), Box<dyn Error>>
     where M: MiddlewareMessages + 'static
@@ -313,7 +319,7 @@ async fn charger_configuration_notifications<M>(gestionnaire: &GestionnairePostm
         None => None
     };
 
-    let requete = json!({});
+    let requete = json!({"inclure_cles": true});
     let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, "getConfigurationNotifications")
         .exchanges(vec![Securite::L1Public])
         .build();
@@ -322,7 +328,67 @@ async fn charger_configuration_notifications<M>(gestionnaire: &GestionnairePostm
     if let TypeMessage::Valide(reponse) = reponse {
         debug!("Reponse configuration consignation : {:?}", reponse);
         let reponse_config: ReponseConfigurationNotifications = reponse.message.parsed.map_contenu(None)?;
-        let config_info = ConfigurationNotifications::try_from(reponse_config)?;
+        debug!("Reponse configuration consignation parsed : {:?}", reponse_config);
+
+        let smtp = match reponse_config.smtp.as_ref() {
+            Some(inner) => {
+                let hostname = match inner.hostname.as_ref() {
+                    Some(h) => h.to_owned(),
+                    None => String::from("localhost")
+                };
+
+                let port = match inner.port.as_ref() {
+                    Some(p) => p.to_owned(),
+                    None => 2525
+                };
+
+                let username = match inner.username.as_ref() {
+                    Some(u) => u.to_owned(),
+                    None => String::from("")
+                };
+
+                let mut configuration_smtp = ConfigurationSmtp {
+                    actif: Some(true) == inner.actif,
+                    hostname,
+                    port,
+                    replyto: inner.replyto.clone(),
+                    username,
+                    password: None,
+                };
+
+                let enveloppe_privee = middleware.get_enveloppe_privee();
+
+                if let Some(cles) = reponse_config.cles.as_ref() {
+                    if let Some(ref_hachage_bytes) = inner.chiffre.ref_hachage_bytes.as_ref() {
+                        if let Some(cle_chiffree) = cles.get(ref_hachage_bytes.as_str()) {
+                            let cle_dechiffree = CleDechiffree::dechiffrer_information_cle(
+                                enveloppe_privee.as_ref(), cle_chiffree.to_owned())?;
+                            let data_dechiffre = dechiffrer_data(cle_dechiffree, inner.chiffre.clone())?;
+                            let data_dechiffre_str = String::from_utf8(data_dechiffre.data_dechiffre)?;
+                            debug!("Data dechiffre : {}", data_dechiffre_str);
+                            let smtp_dechiffre: SmtpDechiffre = serde_json::from_str(data_dechiffre_str.as_str())?;
+                            debug!("smtp dechiffre parsed : {:?}", smtp_dechiffre);
+                            configuration_smtp.password = smtp_dechiffre.smtp_password;
+                            Some(configuration_smtp)
+                        } else {
+                            info!("charger_configuration_notifications Cle configuration {} non presente", ref_hachage_bytes);
+                            None
+                        }
+                    } else {
+                        info!("charger_configuration_notifications ref_hachage_bytes absent de configuration smtp chiffre");
+                        None
+                    }
+                } else {
+                    None
+                }
+
+            },
+            None => None
+        };
+
+        let mut config_info = ConfigurationNotifications::try_from(reponse_config)?;
+        config_info.smtp = smtp;
+
         debug!("Configuration notification parsed : {:?}", config_info);
         {
             let mut guard = gestionnaire.configuration_notifications.lock().expect("lock");
