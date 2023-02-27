@@ -48,6 +48,7 @@ pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gesti
         // Commandes standard
         COMMANDE_POSTER => commande_poster(middleware, m, gestionnaire).await,
         COMMANDE_POUSSER_ATTACHMENT => commande_pousser_attachment(middleware, m, gestionnaire).await,
+        COMMANDE_POST_NOTIFICATION => commande_post_notification(middleware, m, gestionnaire).await,
 
         // Commandes inconnues
         _ => Err(format!("consommer_commande: Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -301,6 +302,16 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
             }
         }
     }
+
+    Ok(None)
+}
+
+async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
+{
+    let message_notifications: NotificationOutgoingPostmaster = m.message.parsed.map_contenu(None)?;
+    debug!("commande_post_notification Message mappe : {:?}", message_notifications);
 
     Ok(None)
 }

@@ -217,3 +217,26 @@ impl TryFrom<ReponseConfigurationNotifications> for ConfigurationNotifications {
         })
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostmasterWebPushPayload {
+    pub content: String,
+    pub crypto_headers: HashMap<String, String>,
+    pub content_encoding: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostmasterWebPushMessage {
+    pub endpoint: String,
+    pub ttl: u32,
+    pub payload: Option<PostmasterWebPushPayload>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NotificationOutgoingPostmaster {
+    pub user_id: String,
+    pub email_adresse: Option<String>,
+    pub email_title: Option<String>,
+    pub email_body: Option<String>,
+    pub webpush_payload: Option<Vec<PostmasterWebPushMessage>>,
+}

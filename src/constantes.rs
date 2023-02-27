@@ -7,6 +7,7 @@ pub const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 pub const COMMANDE_POSTER: &str = "poster";
 pub const COMMANDE_POUSSER_ATTACHMENT: &str = "pousserAttachment";
 pub const COMMANDE_PROCHAIN_ATTACHMENT: &str = "prochainAttachment";
+pub const COMMANDE_POST_NOTIFICATION: &str = "postNotification";
 
 pub const EVENEMENT_UPLOAD_ATTACHMENT: &str = "evenementAttachment";
 pub const COMMANDE_UPLOAD_ATTACHMENT: &str = "uploadAttachment";
