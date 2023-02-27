@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use log::{debug, error, info, warn};
+
+use serde::{Deserialize, Serialize};
 
 use millegrilles_common_rust::constantes::{DEFAULT_Q_TTL, Securite};
 use millegrilles_common_rust::domaines::GestionnaireMessages;
@@ -12,7 +15,8 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::EnveloppePrivee;
-use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
+use millegrilles_common_rust::chiffrage_cle::{InformationCle, ReponseDechiffrageCles};
+use millegrilles_common_rust::common_messages::{DataChiffre, ReponseInformationConsignationFichiers};
 use millegrilles_common_rust::configuration::ConfigurationNoeud;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
 use millegrilles_common_rust::reqwest;
@@ -23,6 +27,7 @@ use crate::commandes::consommer_commande;
 
 use crate::constantes::*;
 use crate::evenements::consommer_evenement;
+use crate::messages_struct::{ConfigurationNotifications, ReponseConfigurationNotifications};
 use crate::requetes::consommer_requete;
 
 #[derive(Debug)]
@@ -32,6 +37,7 @@ pub struct GestionnairePostmaster {
     pub http_client_remote: Option<Client>,
     pub http_client_tor: Option<Client>,
     pub url_consignation: Mutex<Url>,
+    pub configuration_notifications: Mutex<Option<ConfigurationNotifications>>,
 }
 
 #[async_trait]
@@ -78,15 +84,11 @@ impl GestionnaireMessages for GestionnairePostmaster {
 
         // Chargements initiaux - attendre 5 secondes
         sleep(Duration::new(5, 0)).await;
-        if let Err(e) = charger_configuration_consignation(self, middleware.as_ref()).await {
-            error!("Erreur chargement configuration consignation : {:?}", e);
-        }
+        charger_configuration(self, middleware.as_ref()).await;
 
         loop {
             sleep(Duration::new(300, 0)).await;
-            if let Err(e) = charger_configuration_consignation(self, middleware.as_ref()).await {
-                error!("Erreur chargement configuration consignation : {:?}", e);
-            }
+            charger_configuration(self, middleware.as_ref()).await;
         }
         info!("gestionnaire Fin thread entretien");
     }
@@ -100,14 +102,28 @@ impl GestionnaireMessages for GestionnairePostmaster {
     }
 }
 
+async fn charger_configuration<M>(gestionnaire: &GestionnairePostmaster, middleware: &M)
+    where M: MiddlewareMessages + 'static
+{
+    if let Err(e) = charger_configuration_consignation(gestionnaire, middleware).await {
+        error!("gestionnaire.charger_configuration Erreur chargement configuration consignation : {:?}", e);
+    }
+
+    if let Err(e) = charger_configuration_notifications(gestionnaire, middleware).await {
+        error!("gestionnaire.charger_configuration Erreur chargement configuration notifications : {:?}", e);
+    }
+}
+
 impl Clone for GestionnairePostmaster {
     fn clone(&self) -> Self {
-        let url = Mutex::new(self.url_consignation.lock().expect("lock").clone());
+        let url_consignation = Mutex::new(self.url_consignation.lock().expect("lock").clone());
+        let configuration_notifications = Mutex::new(self.configuration_notifications.lock().expect("lock").clone());
         GestionnairePostmaster {
             http_client_local: self.http_client_local.clone(),
             http_client_remote: self.http_client_remote.clone(),
             http_client_tor: self.http_client_tor.clone(),
-            url_consignation: url,
+            url_consignation,
+            configuration_notifications,
         }
     }
 }
@@ -118,7 +134,8 @@ impl GestionnairePostmaster {
             http_client_local: None,
             http_client_remote: None,
             http_client_tor: None,
-            url_consignation: Mutex::new(Url::parse("https://fichiers:443").expect("url"))
+            url_consignation: Mutex::new(Url::parse("https://fichiers:443").expect("url")),
+            configuration_notifications: Mutex::new(None),
         }
     }
 
@@ -244,7 +261,6 @@ pub fn new_client_tor(configuration: &ConfigurationNoeud) -> Option<Client> {
 
 }
 
-
 async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostmaster, middleware: &M)
                                -> Result<(), Box<dyn Error>>
     where M: MiddlewareMessages + 'static
@@ -280,6 +296,39 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
             let mut guard = gestionnaire.url_consignation.lock().expect("lock");
             *guard = consignation_url;
         }
+    }
+
+    Ok(())
+}
+
+async fn charger_configuration_notifications<M>(gestionnaire: &GestionnairePostmaster, middleware: &M)
+    -> Result<(), Box<dyn Error>>
+    where M: MiddlewareMessages + 'static
+{
+    debug!("charger_configuration_notifications Charger configuration de notifications");
+
+    let subject = middleware.get_enveloppe_privee().subject()?;
+    let instance_id = match subject.get("commonName") {
+        Some(subject) => Some(subject.clone()),
+        None => None
+    };
+
+    let requete = json!({});
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, "getConfigurationNotifications")
+        .exchanges(vec![Securite::L1Public])
+        .build();
+
+    let reponse = middleware.transmettre_requete(routage, &requete).await?;
+    if let TypeMessage::Valide(reponse) = reponse {
+        debug!("Reponse configuration consignation : {:?}", reponse);
+        let reponse_config: ReponseConfigurationNotifications = reponse.message.parsed.map_contenu(None)?;
+        let config_info = ConfigurationNotifications::try_from(reponse_config)?;
+        debug!("Configuration notification parsed : {:?}", config_info);
+        {
+            let mut guard = gestionnaire.configuration_notifications.lock().expect("lock");
+            *guard = Some(config_info);
+        }
+
     }
 
     Ok(())

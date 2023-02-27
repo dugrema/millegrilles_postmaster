@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::error::Error;
 use log::debug;
-use millegrilles_common_rust::chiffrage_cle::MetaInformationCle;
+use millegrilles_common_rust::chiffrage_cle::{InformationCle, MetaInformationCle};
 
 use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::common_messages::DataChiffre;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, Entete};
+use millegrilles_common_rust::openssl::conf::Conf;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
 use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_ERREUR, CODE_UPLOAD_TERMINE};
@@ -152,4 +155,65 @@ pub struct ResponsePutFichierPartiel {
     pub code: Option<u32>,
     pub status: Option<usize>,
     pub err: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReponseConfigurationNotificationsWebpush {
+    pub actif: Option<bool>,
+    pub icon: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReponseConfigurationNotifictionsSmtp {
+    pub actif: Option<bool>,
+    pub chiffre: DataChiffre,
+    pub hostname: Option<String>,
+    pub port: Option<u16>,
+    pub replyto: Option<String>,
+    pub username: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReponseConfigurationNotifications {
+    pub email_from: Option<String>,
+    pub intervalle_min: Option<i64>,
+    pub webpush_public_key: Option<String>,
+    pub cles: Option<HashMap<String, InformationCle>>,
+    pub webpush: Option<ReponseConfigurationNotificationsWebpush>,
+    pub smtp : Option<ReponseConfigurationNotifictionsSmtp>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigurationSmtp {
+    pub actif: bool,
+    pub hostname: String,
+    pub port: u16,
+    pub replyto: Option<String>,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigurationNotifications {
+    pub email_from: Option<String>,
+    pub intervalle_min: Option<i64>,
+    pub smtp: Option<ConfigurationSmtp>,
+    pub webpush: Option<ReponseConfigurationNotificationsWebpush>,
+    pub webpush_public_key: Option<String>,
+}
+
+impl TryFrom<ReponseConfigurationNotifications> for ConfigurationNotifications {
+    type Error = Box<dyn Error>;
+
+    fn try_from(value: ReponseConfigurationNotifications) -> Result<Self, Self::Error> {
+        let smtp = None;
+
+        Ok(Self {
+            email_from: value.email_from,
+            intervalle_min: value.intervalle_min,
+            smtp,
+            webpush: value.webpush,
+            webpush_public_key: value.webpush_public_key,
+        })
+    }
 }
