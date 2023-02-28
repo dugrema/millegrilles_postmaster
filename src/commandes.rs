@@ -367,12 +367,16 @@ async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, g
 
     let client = WebPushClient::new()?;
 
-    if let Some(inner) = message_notifications.webpush_payload {
+    if let Some(inner) = message_notifications.webpush {
         for w in inner {
             if let Err(e) = post_webpush(middleware, gestionnaire, user_id.as_str(), &client, w).await {
                 error!("commande_post_notification Erreur webpush message user_id {} : {:?}", user_id, e);
             }
         }
+    }
+
+    if let Some(inner) = message_notifications.email {
+        debug!("commande_post_notification Emettre email {:?}", inner);
     }
 
     Ok(None)
