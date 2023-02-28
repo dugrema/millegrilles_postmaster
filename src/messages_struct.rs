@@ -1,16 +1,20 @@
 use std::collections::HashMap;
 use std::error::Error;
 use log::debug;
-use millegrilles_common_rust::chiffrage_cle::{InformationCle, MetaInformationCle};
 
+use http::uri::Uri;
+
+use millegrilles_common_rust::chiffrage_cle::{InformationCle, MetaInformationCle};
 use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::DataChiffre;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, Entete};
+use millegrilles_common_rust::multibase::decode;
 use millegrilles_common_rust::openssl::conf::Conf;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
-use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_ERREUR, CODE_UPLOAD_TERMINE};
+use web_push::{WebPushMessage, WebPushPayload};
+use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_ERREUR, CODE_UPLOAD_TERMINE, WEBPUSH_ENCODING_AES128, WEBPUSH_HEADER_AUTHORIZATION};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentMessage {
@@ -239,4 +243,47 @@ pub struct NotificationOutgoingPostmaster {
     pub email_title: Option<String>,
     pub email_body: Option<String>,
     pub webpush_payload: Option<Vec<PostmasterWebPushMessage>>,
+}
+
+impl TryInto<WebPushMessage> for PostmasterWebPushMessage {
+    type Error = Box<dyn Error>;
+
+    fn try_into(self) -> Result<WebPushMessage, Self::Error> {
+
+        let payload = match self.payload.as_ref() {
+            Some(inner) => {
+
+                // Changer encoding a 'static &str
+                let content_encoding = match inner.content_encoding.as_str() {
+                    WEBPUSH_ENCODING_AES128 => WEBPUSH_ENCODING_AES128,
+                    _ => Err(format!("Encoding webpsuh non supporte"))?
+                };
+
+                // Mapper avec 'static str pour key
+                let mut crypto_headers = Vec::new();
+                for (key, value) in &inner.crypto_headers {
+                    let key_str = match key.as_str() {
+                        WEBPUSH_HEADER_AUTHORIZATION => WEBPUSH_HEADER_AUTHORIZATION,
+                        _ => Err(format!("Header non supporte"))?
+                    };
+                    crypto_headers.push((key_str, value.to_owned()));
+                }
+
+                Some(WebPushPayload {
+                    content: decode(&inner.content)?.1,
+                    crypto_headers,
+                    content_encoding,
+                })
+            },
+            None => None
+        };
+
+        let endpoint = Uri::try_from(self.endpoint)?;
+
+        Ok(WebPushMessage {
+            endpoint,
+            ttl: self.ttl,
+            payload,
+        })
+    }
 }

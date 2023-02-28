@@ -12,3 +12,6 @@ millegrilles_common_rust = { path = "millegrilles_common_rust" }
 serde = { version = "1.0", features = ["derive"] }
 deflate = { version = "1.0.0", features = ["gzip"] }
 # tokio-util = { version = "0.7.0" }
+
+web-push = "0.9.3"
+http = "0.2.9"

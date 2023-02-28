@@ -14,6 +14,7 @@ use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::verificateur::VerificateurMessage;
 use millegrilles_common_rust::reqwest;
 use millegrilles_common_rust::reqwest::{Client, Url};
+use web_push::{WebPushClient, WebPushError, WebPushMessage};
 
 use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
@@ -306,16 +307,6 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
     Ok(None)
 }
 
-async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
-{
-    let message_notifications: NotificationOutgoingPostmaster = m.message.parsed.map_contenu(None)?;
-    debug!("commande_post_notification Message mappe : {:?}", message_notifications);
-
-    Ok(None)
-}
-
 async fn get_fiche<M>(middleware: &M, message_poster: &CommandePousserAttachments)
     -> Result<FicheMillegrilleApplication, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
@@ -363,4 +354,72 @@ async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePou
     debug!("get_prochain_attachment Reponse prochain attachment : {:?}", reponse);
 
     Ok(reponse)
+}
+
+async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
+{
+    let message_notifications: NotificationOutgoingPostmaster = m.message.parsed.map_contenu(None)?;
+    debug!("commande_post_notification Message mappe : {:?}", message_notifications);
+
+    let user_id = message_notifications.user_id.clone();
+
+    let client = WebPushClient::new()?;
+
+    if let Some(inner) = message_notifications.webpush_payload {
+        for w in inner {
+            if let Err(e) = post_webpush(middleware, gestionnaire, user_id.as_str(), &client, w).await {
+                error!("commande_post_notification Erreur webpush message user_id {} : {:?}", user_id, e);
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+async fn post_webpush<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, user_id: &str, webpush_client: &WebPushClient, webpush_message: PostmasterWebPushMessage)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
+{
+    let endpoint = webpush_message.endpoint.clone();
+
+    // Convertir message en format web-push
+    let message: WebPushMessage = webpush_message.try_into()?;
+    debug!("post_webpush Message converti : {:?}", message);
+
+    if let Err(e) = webpush_client.send(message).await {
+        error!("post_webpush Web push error : {:?}", e);
+        match e {
+            // WebPushError::ServerError(d) => {
+            // },
+            WebPushError::EndpointNotFound => {
+                retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
+            },
+            WebPushError::EndpointNotValid => {
+                retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
+            },
+            _ => Err(e)?
+        }
+    }
+
+    Ok(())
+}
+
+async fn retirer_endpoint<M>(middleware: &M, user_id: &str, endpoint: &str)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages
+{
+    let commande = json!({
+        "user_id": user_id,
+        "endpoint": endpoint,
+    });
+
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, "retirerSubscriptionWebpush")
+        .exchanges(vec![Securite::L1Public])
+        .build();
+
+    middleware.transmettre_commande(routage, &commande, false).await?;
+
+    Ok(())
 }

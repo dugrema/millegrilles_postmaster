@@ -19,3 +19,6 @@ pub const CODE_UPLOAD_DEBUT: u32 = 1;
 pub const CODE_UPLOAD_ENCOURS: u32 = 2;
 pub const CODE_UPLOAD_TERMINE: u32 = 3;
 pub const CODE_UPLOAD_ERREUR: u32 = 4;
+
+pub const WEBPUSH_ENCODING_AES128: &str = "aes128gcm";
+pub const WEBPUSH_HEADER_AUTHORIZATION: &str = "Authorization";
