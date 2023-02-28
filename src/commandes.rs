@@ -17,6 +17,7 @@ use millegrilles_common_rust::reqwest::{Client, Url};
 use web_push::{WebPushClient, WebPushError, WebPushMessage};
 
 use crate::constantes::*;
+use crate::email::post_email;
 use crate::gestionnaire::GestionnairePostmaster;
 use crate::messages_struct::*;
 use crate::transfert_fichier::*;
@@ -377,6 +378,9 @@ async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, g
 
     if let Some(inner) = message_notifications.email {
         debug!("commande_post_notification Emettre email {:?}", inner);
+        if let Err(e) = post_email(gestionnaire, inner).await {
+            error!("commande_post_notification Erreur post email : {:?}", e);
+        }
     }
 
     Ok(None)

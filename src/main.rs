@@ -6,6 +6,7 @@ mod commandes;
 mod evenements;
 mod messages_struct;
 mod transfert_fichier;
+mod email;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;
