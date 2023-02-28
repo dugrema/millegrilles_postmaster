@@ -7,15 +7,18 @@ use lettre::{
     Tokio1Executor,
 };
 use lettre::transport::smtp::client::{Tls, TlsParameters, TlsParametersBuilder};
+use millegrilles_common_rust::constantes::Securite;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
+use millegrilles_common_rust::serde_json::json;
 
-// use mail_headers::{headers::*, header_components::Domain, headers};
-// use mail_core::{Mail, default_impl::simple_context};
-// use mail_smtp::{self as smtp, ConnectionConfig};
-
+use crate::constantes::*;
 use crate::gestionnaire::GestionnairePostmaster;
 use crate::messages_struct::EmailNotification;
 
-pub async fn post_email(gestionnaire: &GestionnairePostmaster, email: EmailNotification) -> Result<(), Box<dyn Error>> {
+pub async fn post_email<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, email: EmailNotification)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages
+{
 
     let (smtp, email_from) = {
         let config = {
@@ -60,7 +63,7 @@ pub async fn post_email(gestionnaire: &GestionnairePostmaster, email: EmailNotif
         error!("post_email Erreur traitement smtp : {:?}", e);
         if e.is_permanent() {
             warn!("email.post_email Erreur permanente : {:?}", e.source());
-            panic!("Erreur permanente - Desactiver notifications email");
+            retirer_smtp(middleware, format!("{:?}", e.source()).as_str()).await?;
         } else if e.is_transient() || e.is_timeout() {
             panic!("Creer periode d'attente emission email");
         } else {
@@ -78,4 +81,21 @@ fn format_email(from: &str, email: EmailNotification) -> Result<Message, Box<dyn
         .subject(email.title.as_str())
         .body(email.body)?;
     Ok(email)
+}
+
+async fn retirer_smtp<M>(middleware: &M, reason: &str)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages
+{
+    let commande = json!({ "err": reason });
+
+    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, "desactiverSmtp")
+        .exchanges(vec![Securite::L1Public])
+        .build();
+
+    middleware.transmettre_commande(routage, &commande, false).await?;
+
+    panic!("Erreur permanente - Desactiver notifications email");
+
+    Ok(())
 }

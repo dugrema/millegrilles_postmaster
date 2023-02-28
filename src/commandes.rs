@@ -21,6 +21,7 @@ use crate::email::post_email;
 use crate::gestionnaire::GestionnairePostmaster;
 use crate::messages_struct::*;
 use crate::transfert_fichier::*;
+use crate::webpush::post_webpush;
 
 pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -378,56 +379,10 @@ async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, g
 
     if let Some(inner) = message_notifications.email {
         debug!("commande_post_notification Emettre email {:?}", inner);
-        if let Err(e) = post_email(gestionnaire, inner).await {
+        if let Err(e) = post_email(middleware, gestionnaire, inner).await {
             error!("commande_post_notification Erreur post email : {:?}", e);
         }
     }
 
     Ok(None)
-}
-
-async fn post_webpush<M>(middleware: &M, gestionnaire: &GestionnairePostmaster, user_id: &str, webpush_client: &WebPushClient, webpush_message: PostmasterWebPushMessage)
-    -> Result<(), Box<dyn Error>>
-    where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
-{
-    let endpoint = webpush_message.endpoint.clone();
-
-    // Convertir message en format web-push
-    let message: WebPushMessage = webpush_message.try_into()?;
-    debug!("post_webpush Message converti : {:?}", message);
-
-    if let Err(e) = webpush_client.send(message).await {
-        error!("post_webpush Web push error : {:?}", e);
-        match e {
-            // WebPushError::ServerError(d) => {
-            // },
-            WebPushError::EndpointNotFound => {
-                retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
-            },
-            WebPushError::EndpointNotValid => {
-                retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
-            },
-            _ => Err(e)?
-        }
-    }
-
-    Ok(())
-}
-
-async fn retirer_endpoint<M>(middleware: &M, user_id: &str, endpoint: &str)
-    -> Result<(), Box<dyn Error>>
-    where M: GenerateurMessages
-{
-    let commande = json!({
-        "user_id": user_id,
-        "endpoint": endpoint,
-    });
-
-    let routage = RoutageMessageAction::builder(DOMAINE_MESSAGERIE, "retirerSubscriptionWebpush")
-        .exchanges(vec![Securite::L1Public])
-        .build();
-
-    middleware.transmettre_commande(routage, &commande, false).await?;
-
-    Ok(())
 }
