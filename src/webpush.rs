@@ -30,12 +30,9 @@ pub async fn post_webpush<M>(
     if let Err(e) = webpush_client.send(message).await {
         error!("post_webpush Web push error : {:?}", e);
         match e {
-            // WebPushError::ServerError(d) => {
-            // },
-            WebPushError::EndpointNotFound => {
-                retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
-            },
-            WebPushError::EndpointNotValid => {
+            WebPushError::EndpointNotFound |
+            WebPushError::EndpointNotValid |
+            WebPushError::Unauthorized => {
                 retirer_endpoint(middleware, user_id, endpoint.as_str()).await?
             },
             _ => Err(e)?
