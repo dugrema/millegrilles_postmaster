@@ -238,7 +238,7 @@ pub struct PostmasterWebPushMessage {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmailNotification {
-    pub adress: String,
+    pub address: String,
     pub title: String,
     pub body: String,
 }

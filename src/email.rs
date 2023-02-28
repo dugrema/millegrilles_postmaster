@@ -77,7 +77,7 @@ pub async fn post_email<M>(middleware: &M, gestionnaire: &GestionnairePostmaster
 fn format_email(from: &str, email: EmailNotification) -> Result<Message, Box<dyn Error>> {
     let email = Message::builder()
         .from(from.parse()?)
-        .to(email.adress.parse()?)
+        .to(email.address.parse()?)
         .subject(email.title.as_str())
         .body(email.body)?;
     Ok(email)
