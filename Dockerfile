@@ -12,6 +12,8 @@ ENV APP_FOLDER=/usr/src/app \
 
 WORKDIR $APP_FOLDER
 
+RUN apt update && apt install -y ca-certificates
+
 COPY target/release/millegrilles_postmaster .
 
 CMD ./millegrilles_postmaster
