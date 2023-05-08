@@ -1,18 +1,18 @@
 [package]
 name = "millegrilles_postmaster"
-version = "2023.2.0"
+version = "2023.5.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = { version = "0.4.14", features = ["max_level_debug", "release_max_level_info"] }
-env_logger = "0.10.0"
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+env_logger = "0.9"
 millegrilles_common_rust = { path = "millegrilles_common_rust" }
 serde = { version = "1.0", features = ["derive"] }
-deflate = { version = "1.0.0", features = ["gzip"] }
+deflate = { version = "1.0", features = ["gzip"] }
 
 # Notifications
-http = "0.2.9"
-web-push = "0.9.3"
-lettre = { version = "0.10.3", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "hostname", "builder"] }
+http = "0.2"
+web-push = "0.9"
+lettre = { version = "0.10.4", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "hostname", "builder"] }

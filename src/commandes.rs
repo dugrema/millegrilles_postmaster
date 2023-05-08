@@ -5,7 +5,7 @@ use deflate::deflate_bytes_gzip;
 
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
-use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
+use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, MessageKind, RolesCertificats, Securite};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -62,9 +62,9 @@ async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
-    let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
+    let uuid_transaction = m.message.parsed.id.as_str();
     debug!("commande_poster Traiter message poster recu : {} : {:?}", uuid_transaction, m);
-    let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu(None)?;
+    let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu()?;
     debug!("commande_poster Message mappe : {:?}", message_poster);
 
     poster_message(middleware, message_poster, gestionnaire).await?;
@@ -91,82 +91,83 @@ async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPos
         message_map
     };
 
-    let uuid_message = match message_mappe.entete {
-        Some(e) => Ok(e.uuid_transaction.clone()),
-        None => Err(format!("commandes.poster_message Entete manquante du message"))
-    }?;
-
-    // let mut headers = reqwest::header::HeaderMap::new();
-    // headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
-    // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
-    // let client = reqwest::Client::builder()
-    //     .default_headers(headers)
-    //     .connect_timeout(Duration::from_secs(10))
-    //     .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
-    //     .build()?;
-
-    debug!("commandes.poster_message Emettre message vers destinations {:?}", message_poster.destinations);
-
-    for destination in message_poster.destinations {
-
-        let cle_info = &message_poster.cle_info;
-        let message_bytes = {
-            let message_http = json!({
-                "message": &message_map,
-                "chiffrage": {
-                    "hachage_bytes": &cle_info.hachage_bytes,
-                    "domaine": "Messagerie",
-                    "format": &cle_info.format,
-                    "signature_identite": &cle_info.signature_identite,
-                    "cles": &destination.cles,
-                    "identificateurs_document": {
-                        "message": "true"
-                    },
-                    "header": &cle_info.header,
-                    "iv": &cle_info.iv,
-                    "tag": &cle_info.tag,
-                },
-                "destinataires": &destination.destinataires,
-            });
-            debug!("poster_message POST message {:?}", message_http);
-
-            // Signer le message, compresser en gzip et pousser via https
-            let message_signe = middleware.formatter_message(
-                &message_http, None::<&str>, None::<&str>, None::<&str>, None, true)?;
-            let message_str = serde_json::to_string(&message_signe)?;
-
-            let message_bytes = deflate_bytes_gzip(message_str.as_bytes());
-
-            message_bytes
-        };
-
-        // Emettre message via HTTP POST
-        let code_reponse = transmettre_message(&gestionnaire, &destination, message_bytes).await?;
-
-        let mut confirmations = Vec::new();
-        let idmg = destination.idmg;
-        for destinataire in destination.destinataires {
-            let conf_dest = ConfirmationTransmissionDestinataire {
-                destinataire,
-                code: code_reponse as u32,  // TODO code par usager (e.g. 404, usager non trouve)
-            };
-            confirmations.push(conf_dest);
-        }
-        let confirmation = ConfirmationTransmission {
-            uuid_message: uuid_message.clone(),
-            idmg,
-            destinataires: confirmations,
-            code: code_reponse,
-        };
-
-        // Transmettre commande confirmation
-        let routage = RoutageMessageAction::builder("Messagerie", "confirmerTransmission")
-            .exchanges(vec![Securite::L1Public])
-            .build();
-        middleware.transmettre_commande(routage, &confirmation, false).await?;
-    }
-
-    Ok(())
+    todo!("fix me");
+    // let uuid_message = match message_mappe.id.clone() {
+    //     Some(e) => Ok(e.uuid_transaction.clone()),
+    //     None => Err(format!("commandes.poster_message Entete manquante du message"))
+    // }?;
+    //
+    // // let mut headers = reqwest::header::HeaderMap::new();
+    // // headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+    // // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+    // // let client = reqwest::Client::builder()
+    // //     .default_headers(headers)
+    // //     .connect_timeout(Duration::from_secs(10))
+    // //     .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
+    // //     .build()?;
+    //
+    // debug!("commandes.poster_message Emettre message vers destinations {:?}", message_poster.destinations);
+    //
+    // for destination in message_poster.destinations {
+    //
+    //     let cle_info = &message_poster.cle_info;
+    //     let message_bytes = {
+    //         let message_http = json!({
+    //             "message": &message_map,
+    //             "chiffrage": {
+    //                 "hachage_bytes": &cle_info.hachage_bytes,
+    //                 "domaine": "Messagerie",
+    //                 "format": &cle_info.format,
+    //                 "signature_identite": &cle_info.signature_identite,
+    //                 "cles": &destination.cles,
+    //                 "identificateurs_document": {
+    //                     "message": "true"
+    //                 },
+    //                 "header": &cle_info.header,
+    //                 "iv": &cle_info.iv,
+    //                 "tag": &cle_info.tag,
+    //             },
+    //             "destinataires": &destination.destinataires,
+    //         });
+    //         debug!("poster_message POST message {:?}", message_http);
+    //
+    //         // Signer le message, compresser en gzip et pousser via https
+    //         let message_signe = middleware.formatter_message(
+    //             MessageKind::Document, &message_http, None::<&str>, None::<&str>, None::<&str>, None, true)?;
+    //         let message_str = serde_json::to_string(&message_signe)?;
+    //
+    //         let message_bytes = deflate_bytes_gzip(message_str.as_bytes());
+    //
+    //         message_bytes
+    //     };
+    //
+    //     // Emettre message via HTTP POST
+    //     let code_reponse = transmettre_message(&gestionnaire, &destination, message_bytes).await?;
+    //
+    //     let mut confirmations = Vec::new();
+    //     let idmg = destination.idmg;
+    //     for destinataire in destination.destinataires {
+    //         let conf_dest = ConfirmationTransmissionDestinataire {
+    //             destinataire,
+    //             code: code_reponse as u32,  // TODO code par usager (e.g. 404, usager non trouve)
+    //         };
+    //         confirmations.push(conf_dest);
+    //     }
+    //     let confirmation = ConfirmationTransmission {
+    //         uuid_message: uuid_message.clone(),
+    //         idmg,
+    //         destinataires: confirmations,
+    //         code: code_reponse,
+    //     };
+    //
+    //     // Transmettre commande confirmation
+    //     let routage = RoutageMessageAction::builder("Messagerie", "confirmerTransmission")
+    //         .exchanges(vec![Securite::L1Public])
+    //         .build();
+    //     middleware.transmettre_commande(routage, &confirmation, false).await?;
+    // }
+    //
+    // Ok(())
 }
 
 async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {
@@ -280,9 +281,9 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
-    let uuid_transaction = m.message.parsed.entete.uuid_transaction.as_str();
+    let uuid_transaction = m.message.parsed.id.as_str();
     debug!("commande_pousser_attachment Traiter message recu : {:?}", uuid_transaction);
-    let message_poster: CommandePousserAttachments = m.message.parsed.map_contenu(None)?;
+    let message_poster: CommandePousserAttachments = m.message.parsed.map_contenu()?;
     debug!("commande_pousser_attachment Message mappe : {:?}", message_poster);
 
     let fiche = get_fiche(middleware, &message_poster).await?;
@@ -327,7 +328,7 @@ async fn get_fiche<M>(middleware: &M, message_poster: &CommandePousserAttachment
         _ => Err(format!("commandes.get_fiche Reponse fiche topologie mauvais format"))
     }?;
 
-    let reponse_mappee: ReponseFichesApplication = reponse_topologie.message.parsed.map_contenu(None)?;
+    let reponse_mappee: ReponseFichesApplication = reponse_topologie.message.parsed.map_contenu()?;
 
     if reponse_mappee.fiches.len() == 1 {
         // Retourner la fiche
@@ -347,7 +348,7 @@ async fn get_prochain_attachment<M>(middleware: &M, message_poster: &CommandePou
 
     let reponse: ReponseProchainAttachment = match middleware.transmettre_commande(routage, message_poster, true).await? {
         Some(t) => match t {
-            TypeMessage::Valide(m) => Ok(m.message.parsed.map_contenu(None)?),
+            TypeMessage::Valide(m) => Ok(m.message.parsed.map_contenu()?),
             _ => Err(format!("commandes.get_prochain_attachment Mauvais type message en reponse"))
         },
         None => Err(format!("commandes.get_prochain_attachment Aucune reponse pour le prochain attachment"))
@@ -362,7 +363,7 @@ async fn commande_post_notification<M>(middleware: &M, m: MessageValideAction, g
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
-    let message_notifications: NotificationOutgoingPostmaster = m.message.parsed.map_contenu(None)?;
+    let message_notifications: NotificationOutgoingPostmaster = m.message.parsed.map_contenu()?;
     debug!("commande_post_notification Message mappe : {:?}", message_notifications);
 
     let user_id = message_notifications.user_id.clone();

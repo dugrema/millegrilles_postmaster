@@ -8,12 +8,12 @@ use millegrilles_common_rust::chiffrage_cle::{InformationCle, MetaInformationCle
 use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::DataChiffre;
-use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, Entete};
+use millegrilles_common_rust::formatteur_messages::DateEpochSeconds;
 use millegrilles_common_rust::multibase::decode;
 use millegrilles_common_rust::openssl::conf::Conf;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::{Map, Value};
-use web_push::{WebPushMessage, WebPushPayload};
+use web_push::{ContentEncoding, Urgency, WebPushMessage, WebPushPayload};
 use crate::constantes::{CODE_UPLOAD_DEBUT, CODE_UPLOAD_ERREUR, CODE_UPLOAD_TERMINE, WEBPUSH_ENCODING_AES128, WEBPUSH_HEADER_AUTHORIZATION};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,9 +22,6 @@ pub struct DocumentMessage {
     pub attachments: Option<Vec<String>>,
     pub fingerprint_certificat: String,
     pub hachage_bytes: String,
-
-    #[serde(rename = "en-tete", skip_serializing)]
-    pub entete: Option<Entete>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,7 +257,7 @@ impl TryInto<WebPushMessage> for PostmasterWebPushMessage {
 
                 // Changer encoding a 'static &str
                 let content_encoding = match inner.content_encoding.as_str() {
-                    WEBPUSH_ENCODING_AES128 => WEBPUSH_ENCODING_AES128,
+                    WEBPUSH_ENCODING_AES128 => ContentEncoding::Aes128Gcm,
                     _ => Err(format!("Encoding webpsuh non supporte"))?
                 };
 
@@ -289,6 +286,7 @@ impl TryInto<WebPushMessage> for PostmasterWebPushMessage {
             endpoint,
             ttl: self.ttl,
             payload,
+            urgency: Some(Urgency::Normal),
         })
     }
 }

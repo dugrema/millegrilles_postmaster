@@ -283,15 +283,17 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
     let reponse = middleware.transmettre_requete(routage, &requete).await?;
     if let TypeMessage::Valide(reponse) = reponse {
         debug!("Reponse configuration consignation : {:?}", reponse);
-        let config_info: ReponseInformationConsignationFichiers = reponse.message.parsed.map_contenu(None)?;
+        let config_info: ReponseInformationConsignationFichiers = reponse.message.parsed.map_contenu()?;
         if let Some(true) = config_info.ok {
             let config_instance = config_info.instance_id;
 
             let consignation_url = if Some(config_instance) == instance_id {
                 Url::parse("https://fichiers:443")
             } else {
-                let consignation_url_str = config_info.consignation_url;
-                Url::parse(consignation_url_str.as_str())
+                match config_info.consignation_url {
+                    Some(inner) => Url::parse(inner.as_str()),
+                    None => Url::parse("https://fichiers:443")  // Default
+                }
             }?;
             debug!("Maj URL consignation : {:?}", consignation_url);
 
@@ -328,7 +330,7 @@ async fn charger_configuration_notifications<M>(gestionnaire: &GestionnairePostm
     let reponse = middleware.transmettre_requete(routage, &requete).await?;
     if let TypeMessage::Valide(reponse) = reponse {
         debug!("Reponse configuration consignation : {:?}", reponse);
-        let reponse_config: ReponseConfigurationNotifications = reponse.message.parsed.map_contenu(None)?;
+        let reponse_config: ReponseConfigurationNotifications = reponse.message.parsed.map_contenu()?;
         debug!("Reponse configuration consignation parsed : {:?}", reponse_config);
 
         let smtp = match reponse_config.smtp.as_ref() {
