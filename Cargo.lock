@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_postmaster"
-version = "2023.5.0"
+version = "2023.6.0"
 dependencies = [
  "deflate",
  "env_logger",
