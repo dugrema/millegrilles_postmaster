@@ -9,6 +9,7 @@ use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::DataChiffre;
 use millegrilles_common_rust::formatteur_messages::DateEpochSeconds;
+use millegrilles_common_rust::messages_generiques::FicheMillegrilleApplication;
 use millegrilles_common_rust::multibase::decode;
 use millegrilles_common_rust::openssl::conf::Conf;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
@@ -24,23 +25,23 @@ pub struct DocumentMessage {
     pub hachage_bytes: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CommandePostmasterPoster {
-    pub message: Map<String, Value>,
-    pub destinations: Vec<IdmgMappingDestinataires>,
-    pub cle_info: MetaInformationCle,
-    pub certificat_message: Vec<String>,
-    pub certificat_millegrille: String,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct CommandePostmasterPoster {
+//     pub message: Map<String, Value>,
+//     pub destinations: Vec<IdmgMappingDestinataires>,
+//     pub cle_info: MetaInformationCle,
+//     pub certificat_message: Vec<String>,
+//     pub certificat_millegrille: String,
+// }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IdmgMappingDestinataires {
-    pub idmg: String,
-    pub mapping: DocMappingIdmg,
-    pub destinataires: Vec<String>,
-    pub fiche: FicheMillegrilleApplication,
-    pub cles: HashMap<String, String>,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct IdmgMappingDestinataires {
+//     pub idmg: String,
+//     pub mapping: DocMappingIdmg,
+//     pub destinataires: Vec<String>,
+//     pub fiche: FicheMillegrilleApplication,
+//     pub cles: HashMap<String, String>,
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocMappingIdmg {
@@ -53,29 +54,28 @@ pub struct ReponseFichesApplication {
     pub fiches: Vec<FicheMillegrilleApplication>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FicheMillegrilleApplication {
-    pub idmg: String,
-    pub adresses: Vec<String>,
-    pub application: Vec<FicheApplication>,
-    pub ca: Option<String>,
-    pub chiffrage: Option<Vec<Vec<String>>>,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct FicheMillegrilleApplication {
+//     pub idmg: String,
+//     pub adresses: Vec<String>,
+//     pub application: Vec<FicheApplication>,
+//     pub ca: Option<String>,
+//     pub chiffrage: Option<Vec<Vec<String>>>,
+// }
+//
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct FicheApplication {
+//     pub application: String,
+//     pub url: String,
+//     pub version: Option<String>,
+// }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FicheApplication {
-    pub application: String,
-    pub url: String,
-    pub version: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ConfirmationTransmission {
-    pub uuid_message: String,
-    pub idmg: String,
-    pub destinataires: Vec<ConfirmationTransmissionDestinataire>,
-    pub code: u16,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct ConfirmationTransmission {
+//     pub message_id: String,
+//     pub idmg: String,
+//     pub code: u16,
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfirmationTransmissionDestinataire {

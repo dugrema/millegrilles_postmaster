@@ -26,6 +26,7 @@ use millegrilles_common_rust::tokio_util::io::StreamReader;
 use millegrilles_common_rust::tokio::io::{AsyncReadExt};
 use millegrilles_common_rust::futures;
 use millegrilles_common_rust::bytes;
+use millegrilles_common_rust::messages_generiques::{FicheApplication, FicheMillegrilleApplication};
 
 use crate::constantes::*;
 use crate::gestionnaire::{GestionnairePostmaster, new_client_local};

@@ -8,6 +8,7 @@ use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, MessageKind, RolesCertificats, Securite};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
+use millegrilles_common_rust::messages_generiques::{CommandePostmasterPoster, ConfirmationTransmission, FicheApplication, FicheMillegrilleApplication};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::{json, Value};
@@ -58,187 +59,157 @@ pub async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gesti
     }
 }
 
-async fn commande_poster<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
+async fn commande_poster<M>(middleware: &M, mut m: MessageValideAction, gestionnaire: &GestionnairePostmaster)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
-    let uuid_transaction = m.message.parsed.id.as_str();
-    debug!("commande_poster Traiter message poster recu : {} : {:?}", uuid_transaction, m);
-    let message_poster: CommandePostmasterPoster = m.message.parsed.map_contenu()?;
-    debug!("commande_poster Message mappe : {:?}", message_poster);
+    // Extraire les attachements
+    let mut attachements = match m.message.parsed.attachements.take() {
+        Some(inner) => inner,
+        None => Err(format!("Attachements manquants dans la commande poster"))?
+    };
 
-    poster_message(middleware, message_poster, gestionnaire).await?;
+    let message_poster: MessageMilleGrille = match attachements.remove("message") {
+        Some(inner) => serde_json::from_value(inner)?,
+        None => Err(format!("Attachements manquants dans la commande poster"))?
+    };
+    let message_id = message_poster.id.as_str();
+    debug!("commande_poster Traiter message recu : {}", message_id);
+
+    let commande_poster: CommandePostmasterPoster = m.message.parsed.map_contenu()?;
+    debug!("commande_poster Commande mappee : {:?}", commande_poster);
+
+    // Comparer le message id de la commande et du message attache
+    let message_id_commande = commande_poster.message_id.as_str();
+    if message_id != message_id_commande {
+        Err(format!("commandes.commande_poster Mismatch message_id de la commande et message attache"))?;
+    }
+
+    poster_message(middleware, gestionnaire, commande_poster, message_poster).await?;
 
     Ok(None)
 }
 
-async fn poster_message<M>(middleware: &M, message_poster: CommandePostmasterPoster, gestionnaire: &GestionnairePostmaster)
+async fn emettre_confirmation<M>(middleware: &M, commande: &CommandePostmasterPoster, code: u16)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages
+{
+    let idmg = commande.idmg.as_str();
+    let message_id = commande.message_id.as_str();
+
+    let confirmation = ConfirmationTransmission {
+        message_id: message_id.to_owned(),
+        idmg: idmg.to_owned(),
+        code,
+    };
+
+    // Transmettre commande confirmation
+    let routage = RoutageMessageAction::builder("Messagerie", "confirmerTransmission")
+        .exchanges(vec![Securite::L1Public])
+        .build();
+
+    middleware.transmettre_commande(routage, &confirmation, false).await?;
+
+    Ok(())
+}
+
+async fn poster_message<M>(
+    middleware: &M, gestionnaire: &GestionnairePostmaster,
+    commande_poster: CommandePostmasterPoster,
+    message: MessageMilleGrille
+)
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509
 {
-    debug!("poster_message Poster {:?}", message_poster);
+    debug!("poster_message Commande\n{}\nMessage\n{}", serde_json::to_string(&commande_poster)?, serde_json::to_string(&message)?);
 
-    let message_mappe: DocumentMessage = {
-        let value = serde_json::to_value(message_poster.message.clone())?;
-        serde_json::from_value(value)?
-    };
+    let message_id = commande_poster.message_id.as_str();
 
-    // Ajouter _certificat et _millegrille au message
-    let message_map = {
-        let mut message_map = message_poster.message;
-        message_map.insert("_certificat".into(), Value::from(message_poster.certificat_message.clone()));
-        message_map.insert("_millegrille".into(), Value::from(message_poster.certificat_millegrille.clone()));
-        message_map
-    };
+    // Trier destinations - utiliser TOR en premier si disponible
+    let destinations = trier_destinations(gestionnaire, &commande_poster.fiche);
 
-    todo!("fix me");
-    // let uuid_message = match message_mappe.id.clone() {
-    //     Some(e) => Ok(e.uuid_transaction.clone()),
-    //     None => Err(format!("commandes.poster_message Entete manquante du message"))
-    // }?;
-    //
-    // // let mut headers = reqwest::header::HeaderMap::new();
-    // // headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
-    // // headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
-    // // let client = reqwest::Client::builder()
-    // //     .default_headers(headers)
-    // //     .connect_timeout(Duration::from_secs(10))
-    // //     .danger_accept_invalid_certs(true)  // TODO : supporter valide/invalide avec upgrade securite emission
-    // //     .build()?;
-    //
-    // debug!("commandes.poster_message Emettre message vers destinations {:?}", message_poster.destinations);
-    //
-    // for destination in message_poster.destinations {
-    //
-    //     let cle_info = &message_poster.cle_info;
-    //     let message_bytes = {
-    //         let message_http = json!({
-    //             "message": &message_map,
-    //             "chiffrage": {
-    //                 "hachage_bytes": &cle_info.hachage_bytes,
-    //                 "domaine": "Messagerie",
-    //                 "format": &cle_info.format,
-    //                 "signature_identite": &cle_info.signature_identite,
-    //                 "cles": &destination.cles,
-    //                 "identificateurs_document": {
-    //                     "message": "true"
-    //                 },
-    //                 "header": &cle_info.header,
-    //                 "iv": &cle_info.iv,
-    //                 "tag": &cle_info.tag,
-    //             },
-    //             "destinataires": &destination.destinataires,
-    //         });
-    //         debug!("poster_message POST message {:?}", message_http);
-    //
-    //         // Signer le message, compresser en gzip et pousser via https
-    //         let message_signe = middleware.formatter_message(
-    //             MessageKind::Document, &message_http, None::<&str>, None::<&str>, None::<&str>, None, true)?;
-    //         let message_str = serde_json::to_string(&message_signe)?;
-    //
-    //         let message_bytes = deflate_bytes_gzip(message_str.as_bytes());
-    //
-    //         message_bytes
-    //     };
-    //
-    //     // Emettre message via HTTP POST
-    //     let code_reponse = transmettre_message(&gestionnaire, &destination, message_bytes).await?;
-    //
-    //     let mut confirmations = Vec::new();
-    //     let idmg = destination.idmg;
-    //     for destinataire in destination.destinataires {
-    //         let conf_dest = ConfirmationTransmissionDestinataire {
-    //             destinataire,
-    //             code: code_reponse as u32,  // TODO code par usager (e.g. 404, usager non trouve)
-    //         };
-    //         confirmations.push(conf_dest);
-    //     }
-    //     let confirmation = ConfirmationTransmission {
-    //         uuid_message: uuid_message.clone(),
-    //         idmg,
-    //         destinataires: confirmations,
-    //         code: code_reponse,
-    //     };
-    //
-    //     // Transmettre commande confirmation
-    //     let routage = RoutageMessageAction::builder("Messagerie", "confirmerTransmission")
-    //         .exchanges(vec![Securite::L1Public])
-    //         .build();
-    //     middleware.transmettre_commande(routage, &confirmation, false).await?;
-    // }
-    //
-    // Ok(())
+    // Serialiser, compresser message en gzip.
+    let message_bytes = serde_json::to_vec(&message)?;
+    let message_bytes = deflate_bytes_gzip(&message_bytes[..]);
+
+    let mut resultat = 0;
+    for destination in destinations {
+        match transmettre_message(&gestionnaire, destination, &message_bytes).await {
+            Ok(inner) => {
+                resultat = inner;
+                break;  // Transfert complete
+            },
+            Err(e) => {
+                warn!("poster_message Erreur transfert message {:?}", e);
+                resultat = 500;
+            }
+        }
+    }
+
+    emettre_confirmation(middleware, &commande_poster, resultat).await?;
+
+    Ok(())
 }
 
-async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {
+async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &FicheApplication, message_bytes: &Vec<u8>)
+    -> Result<u16, Box<dyn Error>>
+{
     let mut status_reponse = None;
 
-    let destinations = trier_destinations(gestionnaire, destination);
+    debug!("transmettre_message Liste destinations triees : {:?}", destination);
+    let url_app_str = format!("{}/poster", destination.url.as_str());
+    let url_poster = Url::parse(url_app_str.as_str())?;
 
-    debug!("transmettre_message Liste destinations triees : {:?}", destinations);
-
-    // Boucler dans la liste des destinations pour la millegrille tierce
-    for app_config in destinations {
-        let url_app_str = format!("{}/poster", app_config.url.as_str());
-        let url_poster = match Url::parse(url_app_str.as_str()) {
-            Ok(inner) => inner,
-            Err(e) => {
-                info!("transmettre_message Erreur parse URL {} : {:?}", url_app_str, e);
-                continue;  // Skip
-            }
-        };
-
-        info!("transmettre_message Poster message vers {:?}", url_poster);
-        let client = match url_poster.domain() {
-            Some(domaine) => {
-                if domaine.ends_with(".onion") {
-                    match &gestionnaire.http_client_tor {
-                        Some(inner) => inner,
-                        None => {
-                            // Tor n'est pas disponible, on skip cette adresse
-                            continue;
-                        }
-                    }
-                } else {
-                    match &gestionnaire.http_client_remote {
-                        Some(inner) => inner,
-                        None => {
-                            // Client https non disponible, on skip cette adresse
-                            continue;
-                        }
+    info!("transmettre_message Poster message vers {:?}", url_poster);
+    let client = match url_poster.domain() {
+        Some(domaine) => {
+            if domaine.ends_with(".onion") {
+                match &gestionnaire.http_client_tor {
+                    Some(inner) => inner,
+                    None => {
+                        // Tor n'est pas disponible, on skip cette adresse
+                        Err(format!("commandes.transmettre_message  Tor n'est pas disponible"))?
                     }
                 }
-            },
-            None => {
-                info!("transmettre_message URL sans domaine, skip");
-                continue;
+            } else {
+                match &gestionnaire.http_client_remote {
+                    Some(inner) => inner,
+                    None => {
+                        // Client https non disponible, on skip cette adresse
+                        Err(format!("commandes.transmettre_message  Client https non disponible"))?
+                    }
+                }
             }
-        };
-
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
-        headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
-
-        let request_builder = client.post(url_poster.clone())
-            .headers(headers)
-            .body(message_bytes.clone());
-
-        let res = match request_builder.send().await {
-            Ok(inner) => inner,
-            Err(e) => {
-                warn!("Erreur transmission message via {} : {:?}", url_app_str, e);
-                continue;
-            }
-        };
-
-        debug!("Reponse post HTTP : {:?}", res);
-        if res.status().is_success() {
-            info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
-            status_reponse = Some(res.status());
-            break;  // On a reussi le transfert, pas besoin de poursuivre
-        } else {
-            warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
+        },
+        None => {
+            warn!("transmettre_message URL sans domaine, skip");
+            Err(format!("commandes.transmettre_message URL sans domaine, skip"))?
         }
+    };
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+    headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+
+    let request_builder = client.post(url_poster.clone())
+        .headers(headers)
+        .body(message_bytes.clone());
+
+    let res = match request_builder.send().await {
+        Ok(inner) => inner,
+        Err(e) => {
+            warn!("Erreur transmission message via {} : {:?}", url_app_str, e);
+            Err(format!("Erreur transmission message via {} : {:?}", url_app_str, e))?
+        }
+    };
+
+    debug!("Reponse post HTTP : {:?}", res);
+    if res.status().is_success() {
+        info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
+        status_reponse = Some(res.status());
+    } else {
+        warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
+        status_reponse = Some(res.status());
     }
 
     // Return code reponse
@@ -250,11 +221,93 @@ async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination:
     Ok(code_reponse)
 }
 
+// async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {
+//     let mut status_reponse = None;
+//
+//     let destinations = trier_destinations(gestionnaire, destination);
+//
+//     debug!("transmettre_message Liste destinations triees : {:?}", destinations);
+//
+//     // Boucler dans la liste des destinations pour la millegrille tierce
+//     for app_config in destinations {
+//         let url_app_str = format!("{}/poster", app_config.url.as_str());
+//         let url_poster = match Url::parse(url_app_str.as_str()) {
+//             Ok(inner) => inner,
+//             Err(e) => {
+//                 info!("transmettre_message Erreur parse URL {} : {:?}", url_app_str, e);
+//                 continue;  // Skip
+//             }
+//         };
+//
+//         info!("transmettre_message Poster message vers {:?}", url_poster);
+//         let client = match url_poster.domain() {
+//             Some(domaine) => {
+//                 if domaine.ends_with(".onion") {
+//                     match &gestionnaire.http_client_tor {
+//                         Some(inner) => inner,
+//                         None => {
+//                             // Tor n'est pas disponible, on skip cette adresse
+//                             continue;
+//                         }
+//                     }
+//                 } else {
+//                     match &gestionnaire.http_client_remote {
+//                         Some(inner) => inner,
+//                         None => {
+//                             // Client https non disponible, on skip cette adresse
+//                             continue;
+//                         }
+//                     }
+//                 }
+//             },
+//             None => {
+//                 info!("transmettre_message URL sans domaine, skip");
+//                 continue;
+//             }
+//         };
+//
+//         let mut headers = reqwest::header::HeaderMap::new();
+//         headers.insert("Content-Type", reqwest::header::HeaderValue::from_static("application/json"));
+//         headers.insert("Content-Encoding", reqwest::header::HeaderValue::from_static("gzip"));
+//
+//         let request_builder = client.post(url_poster.clone())
+//             .headers(headers)
+//             .body(message_bytes.clone());
+//
+//         let res = match request_builder.send().await {
+//             Ok(inner) => inner,
+//             Err(e) => {
+//                 warn!("Erreur transmission message via {} : {:?}", url_app_str, e);
+//                 continue;
+//             }
+//         };
+//
+//         debug!("Reponse post HTTP : {:?}", res);
+//         if res.status().is_success() {
+//             info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
+//             status_reponse = Some(res.status());
+//             break;  // On a reussi le transfert, pas besoin de poursuivre
+//         } else {
+//             warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
+//         }
+//     }
+//
+//     // Return code reponse
+//     let code_reponse = match status_reponse {
+//         Some(r) => r.as_u16(),
+//         None => 503
+//     };
+//
+//     Ok(code_reponse)
+// }
+
 /// Mettre les destinations en ordre (TOR en premier si disponible)
-pub fn trier_destinations<'a>(gestionnaire: &GestionnairePostmaster, destination: &'a IdmgMappingDestinataires) -> Vec<&'a FicheApplication> {
+pub fn trier_destinations<'a>(gestionnaire: &GestionnairePostmaster, destination: &'a FicheMillegrilleApplication)
+    -> Vec<&'a FicheApplication>
+{
     let tor_disponible = gestionnaire.http_client_tor.is_some();
     let mut destinations = Vec::new();
-    for app_config in &destination.fiche.application {
+    for app_config in &destination.application {
         let url = match Url::parse(app_config.url.as_str()) {
             Ok(inner) => inner,
             Err(e) => {
