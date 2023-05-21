@@ -90,7 +90,7 @@ async fn commande_poster<M>(middleware: &M, mut m: MessageValideAction, gestionn
     Ok(None)
 }
 
-async fn emettre_confirmation<M>(middleware: &M, commande: &CommandePostmasterPoster, code: u16)
+async fn emettre_confirmation<M>(middleware: &M, commande: &CommandePostmasterPoster, reponse: PostmasterReponse)
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages
 {
@@ -100,7 +100,8 @@ async fn emettre_confirmation<M>(middleware: &M, commande: &CommandePostmasterPo
     let confirmation = ConfirmationTransmission {
         message_id: message_id.to_owned(),
         idmg: idmg.to_owned(),
-        code,
+        code: reponse.code,
+        adresses: reponse.adresses,
     };
 
     // Transmettre commande confirmation
@@ -132,30 +133,30 @@ async fn poster_message<M>(
     let message_bytes = serde_json::to_vec(&message)?;
     let message_bytes = deflate_bytes_gzip(&message_bytes[..]);
 
-    let mut resultat = 0;
+    let mut resultat = None;
     for destination in destinations {
         match transmettre_message(&gestionnaire, destination, &message_bytes).await {
             Ok(inner) => {
-                resultat = inner;
+                resultat = Some(inner);
                 break;  // Transfert complete
             },
             Err(e) => {
                 warn!("poster_message Erreur transfert message {:?}", e);
-                resultat = 500;
+                resultat = Some(PostmasterReponse { code: 500, adresses: None });
             }
         }
     }
 
-    emettre_confirmation(middleware, &commande_poster, resultat).await?;
+    if let Some(inner) = resultat {
+        emettre_confirmation(middleware, &commande_poster, inner).await?;
+    }
 
     Ok(())
 }
 
 async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &FicheApplication, message_bytes: &Vec<u8>)
-    -> Result<u16, Box<dyn Error>>
+    -> Result<PostmasterReponse, Box<dyn Error>>
 {
-    let mut status_reponse = None;
-
     debug!("transmettre_message Liste destinations triees : {:?}", destination);
     let url_app_str = format!("{}/poster", destination.url.as_str());
     let url_poster = Url::parse(url_app_str.as_str())?;
@@ -203,22 +204,26 @@ async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination:
         }
     };
 
+    let status_code = res.status();
+
     debug!("Reponse post HTTP : {:?}", res);
     if res.status().is_success() {
         info!("poster_message SUCCES poster message vers {}, status {}", url_poster, res.status().as_u16());
-        status_reponse = Some(res.status());
+        let resultat = res.bytes().await?;
+        debug!("poster_message Reponse : {}", String::from_utf8_lossy(&resultat[..]));
+
+        let message_reponse: MessageMilleGrille = serde_json::from_slice(&resultat[..])?;
+        // TODO Valider message reponse avec cert CA de la fiche
+
+        let resultat: MessageriePostInterReponse = message_reponse.map_contenu()?;
+        let reponse = PostmasterReponse { code: status_code.as_u16(), adresses: Some(resultat.adresses) };
+        Ok(reponse)
     } else {
         warn!("poster_message ECHEC poster message vers {}, status {}", url_poster, res.status().as_u16());
-        status_reponse = Some(res.status());
+        // status_reponse = Some(res.status());
+        let reponse = PostmasterReponse { code: status_code.as_u16(), adresses: None };
+        Ok(reponse)
     }
-
-    // Return code reponse
-    let code_reponse = match status_reponse {
-        Some(r) => r.as_u16(),
-        None => 503
-    };
-
-    Ok(code_reponse)
 }
 
 // async fn transmettre_message(gestionnaire: &GestionnairePostmaster, destination: &IdmgMappingDestinataires, message_bytes: Vec<u8>) -> Result<u16, Box<dyn Error>> {

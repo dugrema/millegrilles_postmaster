@@ -290,3 +290,15 @@ impl TryInto<WebPushMessage> for PostmasterWebPushMessage {
         })
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MessageriePostInterReponse {
+    pub ok: bool,
+    pub adresses: HashMap<String, u16>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostmasterReponse {
+    pub code: u16,
+    pub adresses: Option<HashMap<String, u16>>,
+}
