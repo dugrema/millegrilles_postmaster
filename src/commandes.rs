@@ -148,6 +148,7 @@ async fn poster_message<M>(
     }
 
     if let Some(inner) = resultat {
+        debug!("poster_message Emettre confirmation : {:?}", inner);
         emettre_confirmation(middleware, &commande_poster, inner).await?;
     }
 
