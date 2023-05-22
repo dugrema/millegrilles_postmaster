@@ -346,9 +346,8 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
     debug!("commande_pousser_attachment Message mappe : {:?}", message_poster);
 
     let fiche = get_fiche(middleware, &message_poster).await?;
-    let uuid_message = message_poster.message_id.as_str();
+    let message_id = message_poster.message_id.as_str();
 
-    // TODO Requete vers messagerie pour recuperer les fuuids a uploader
     loop {
         let prochain_attachment = get_prochain_attachment(middleware, &message_poster).await?;
 
@@ -358,7 +357,7 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
 
         // Uploader l'attachment
         match prochain_attachment.fuuid.as_ref() {
-            Some(f) => uploader_attachment(middleware, gestionnaire, &fiche, f.as_str(), uuid_message).await?,
+            Some(f) => uploader_attachment(middleware, gestionnaire, &fiche, f.as_str(), message_id).await?,
             None => {
                 debug!("commande_pousser_attachment Aucun fuuid recu, on termine");
                 break

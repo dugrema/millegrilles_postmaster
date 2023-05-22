@@ -36,7 +36,7 @@ const BUFFER_SIZE: u32 = 128*1024;
 const MESSAGE_SIZE_LIMIT: usize = 5 * 1024 * 1024;
 
 pub async fn uploader_attachment<M>(
-    middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, uuid_message: &str)
+    middleware: &M, gestionnaire: &GestionnairePostmaster, fiche: &FicheMillegrilleApplication, fuuid: &str, message_id: &str)
     -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + VerificateurMessage + ValidateurX509 + IsConfigNoeud
 {
@@ -45,22 +45,22 @@ pub async fn uploader_attachment<M>(
 
     { // Emettre evenement de debut - s'assure de confirmer que le fichier est en cours de traitement
         let evenement = EvenementUploadAttachment::nouveau(
-            uuid_message.into(), idmg.into(), fuuid.into());
+            message_id.into(), idmg.into(), fuuid.into());
         emettre_evenement_upload(middleware, evenement).await?;
     }
 
     // Creer pipeline d'upload vers le serveur distant.
-    let resultat = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, uuid_message).await {
+    let resultat = match transferer_fichier(middleware, gestionnaire, fiche, fuuid, message_id).await {
         Ok(status_code) => {
             debug!("uploader_attachment Complete, status {}", status_code);
             // Emettre evenement de confirmation d'upload complete
-            let commande = EvenementUploadAttachment::complete(uuid_message.into(), idmg.into(), fuuid.into(), status_code);
+            let commande = EvenementUploadAttachment::complete(message_id.into(), idmg.into(), fuuid.into(), status_code);
             Ok(commande)
         },
         Err(e) => {
             error!("uploader_attachment Erreur transferer fichier : {:?}", e);
             // Emettre evenement d'erreur d'upload de fichier (incomplet, retry plus tard)
-            Err(EvenementUploadAttachment::erreur(uuid_message.into(), idmg.into(), fuuid.into(), 500))
+            Err(EvenementUploadAttachment::erreur(message_id.into(), idmg.into(), fuuid.into(), 500))
         }
     };
 

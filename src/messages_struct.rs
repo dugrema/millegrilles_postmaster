@@ -103,7 +103,7 @@ pub struct ReponseProchainAttachment {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvenementUploadAttachment {
-    pub uuid_message: String,
+    pub message_id: String,
     pub idmg: String,
     pub fuuid: String,
     pub code: u32,
@@ -115,7 +115,7 @@ pub struct EvenementUploadAttachment {
 impl EvenementUploadAttachment {
     pub fn nouveau(uuid_message: String, idmg: String, fuuid: String) -> Self {
         EvenementUploadAttachment {
-            uuid_message,
+            message_id: uuid_message,
             idmg,
             fuuid,
             code: CODE_UPLOAD_DEBUT,
@@ -127,7 +127,7 @@ impl EvenementUploadAttachment {
 
     pub fn complete(uuid_message: String, idmg: String, fuuid: String, http_status: u16) -> Self {
         EvenementUploadAttachment {
-            uuid_message,
+            message_id: uuid_message,
             idmg,
             fuuid,
             code: CODE_UPLOAD_TERMINE,
@@ -139,7 +139,7 @@ impl EvenementUploadAttachment {
 
     pub fn erreur(uuid_message: String, idmg: String, fuuid: String, http_status: u16) -> Self {
         EvenementUploadAttachment {
-            uuid_message,
+            message_id: uuid_message,
             idmg,
             fuuid,
             code: CODE_UPLOAD_ERREUR,
