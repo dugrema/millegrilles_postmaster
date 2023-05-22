@@ -346,7 +346,7 @@ async fn commande_pousser_attachment<M>(middleware: &M, m: MessageValideAction, 
     debug!("commande_pousser_attachment Message mappe : {:?}", message_poster);
 
     let fiche = get_fiche(middleware, &message_poster).await?;
-    let uuid_message = message_poster.uuid_message.as_str();
+    let uuid_message = message_poster.message_id.as_str();
 
     // TODO Requete vers messagerie pour recuperer les fuuids a uploader
     loop {

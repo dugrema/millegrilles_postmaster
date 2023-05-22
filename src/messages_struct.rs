@@ -85,7 +85,7 @@ pub struct ConfirmationTransmissionDestinataire {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandePousserAttachments {
-    pub uuid_message: String,
+    pub message_id: String,
     pub idmg_destination: String,
 }
 

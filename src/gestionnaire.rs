@@ -282,14 +282,12 @@ async fn charger_configuration_consignation<M>(gestionnaire: &GestionnairePostma
 
     let reponse = middleware.transmettre_requete(routage, &requete).await?;
     if let TypeMessage::Valide(reponse) = reponse {
-        debug!("Reponse configuration consignation : {:?}", reponse);
+        debug!("charger_configuration_consignation Reponse configuration consignation : {:?}", reponse);
         let config_info: ReponseInformationConsignationFichiers = reponse.message.parsed.map_contenu()?;
         if let Some(true) = config_info.ok {
             let config_instance = config_info.instance_id;
 
-            let consignation_url = if Some(config_instance) == instance_id {
-                Url::parse("https://fichiers:443")
-            } else {
+            let consignation_url = {
                 match config_info.consignation_url {
                     Some(inner) => Url::parse(inner.as_str()),
                     None => Url::parse("https://fichiers:443")  // Default
