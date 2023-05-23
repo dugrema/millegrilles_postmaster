@@ -167,7 +167,10 @@ async fn connecter_local<M>(middleware: &M, gestionnaire: &GestionnairePostmaste
     Ok(reponse)
 }
 
-async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuuid: &str, position: Option<usize>, stream: Body)
+async fn connecter_remote(
+    gestionnaire: &GestionnairePostmaster,
+    url: &str, fuuid: &str, position: Option<usize>, stream: Body, taille_fichier: &Option<usize>
+)
     -> Result<Response, Box<dyn Error>>
 {
     let client = get_client(gestionnaire, url)?;
@@ -179,10 +182,12 @@ async fn connecter_remote(gestionnaire: &GestionnairePostmaster, url: &str, fuui
     };
     url_put_fichier.set_path(url_liste_fichiers_str.as_str());
 
-    let response = client.put(url_put_fichier.clone())
-        .header("Content-Type", "application/stream")
-        .body(stream)
-        .send().await?;
+    let mut request_builder = client.put(url_put_fichier.clone())
+        .header("Content-Type", "application/stream");
+    if let Some(taille) = taille_fichier {
+        request_builder = request_builder.header("X-Total-Length", taille.to_string());
+    }
+    let response = request_builder.body(stream).send().await?;
 
     if ! response.status().is_success() {
         // Cleanup upload (aucun effet si upload simple)
@@ -242,7 +247,7 @@ impl UploadHandler {
         let iter = read_to_substream(stream_state_rc.clone());
         let body_stream = Body::wrap_stream(iter);
 
-        let reponse = connecter_remote(gestionnaire, url, fuuid, None, body_stream).await?;
+        let reponse = connecter_remote(gestionnaire, url, fuuid, None, body_stream, &self.taille).await?;
 
         if ! reponse.status().is_success() {
             Err(format!("Erreur upload code {}", reponse.status().as_u16()))?
@@ -264,7 +269,7 @@ impl UploadHandler {
             let body = Body::wrap_stream(iter);
 
             debug!("upload_split Uploader part position {}", position_courante);
-            let reponse_part = connecter_remote(gestionnaire, url, fuuid, Some(position_courante), body).await?;
+            let reponse_part = connecter_remote(gestionnaire, url, fuuid, Some(position_courante), body, &self.taille).await?;
 
             let status = reponse_part.status();
             let status_code = status.as_u16();
